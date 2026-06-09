@@ -185,71 +185,6 @@ export class PythonClient {
     })
   }
 
-  async downloadModel(
-    model: string,
-    options: { onProgress?: (progress: number, message: string) => void } = {}
-  ): Promise<void> {
-    const venvPython = await this.ensureVenvReady()
-    const scriptPath = this.resolvePythonScript('download_model.py')
-
-    const hfToken = this.db.getDecryptedSetting('hf_token')
-    if (!hfToken) {
-      throw new Error('Hugging Face Token não configurado.')
-    }
-
-    const cacheDir = this.getHuggingFaceCacheDir()
-
-    return new Promise((resolve, reject) => {
-      const proc = spawn(
-        venvPython,
-        [scriptPath, '--model', model, '--hf-token-stdin', '--cache-dir', cacheDir],
-        { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
-      )
-
-      if (proc.stdin) {
-        proc.stdin.write(hfToken)
-        proc.stdin.end()
-      }
-
-      proc.stdout.on('data', () => { /* ignore */ })
-
-      let stderrBuffer = ''
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        stderrBuffer += chunk.toString('utf-8')
-        const lines = stderrBuffer.split(/\r?\n/)
-        stderrBuffer = lines.pop() ?? ''
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          try {
-            const parsed = JSON.parse(trimmed)
-            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
-              options.onProgress(parsed.progress, parsed.message || '')
-            }
-            if (parsed.type === 'error') {
-              reject(new Error(parsed.message || 'Download failed'))
-              proc.kill()
-              return
-            }
-          } catch { /* ignore non-JSON */ }
-        }
-      })
-
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve()
-        } else {
-          reject(new Error(`Download failed with code ${code}`))
-        }
-      })
-
-      proc.on('error', (err) => {
-        reject(new Error(`Failed to spawn download: ${err.message}`))
-      })
-    })
-  }
-
   private getCheckpointPath(audioPath: string, model: string): string {
     const checkpointsDir = path.join(app.getPath('userData'), 'transcription_checkpoints')
     fs.mkdirSync(checkpointsDir, { recursive: true })
@@ -395,57 +330,6 @@ export class PythonClient {
 
       proc.on('error', (err) => {
         reject(new Error(`Failed to spawn transcription script: ${err.message}`))
-      })
-    })
-  }
-
-  async downloadWhisperModel(
-    options: { onProgress?: (progress: number, message: string) => void } = {}
-  ): Promise<void> {
-    const venvPython = await this.ensureVenvReady()
-    const scriptPath = this.resolvePythonScript('download_whisper.py')
-    const modelDir = this.getWhisperModelDir()
-
-    return new Promise((resolve, reject) => {
-      const proc = spawn(
-        venvPython,
-        [scriptPath, '--model-dir', modelDir],
-        { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
-      )
-
-      let stderrBuffer = ''
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        stderrBuffer += chunk.toString('utf-8')
-        const lines = stderrBuffer.split(/\r?\n/)
-        stderrBuffer = lines.pop() ?? ''
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          try {
-            const parsed = JSON.parse(trimmed)
-            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
-              options.onProgress(parsed.progress, parsed.message || '')
-            }
-            if (parsed.type === 'error') {
-              reject(new Error(parsed.message || 'Download failed'))
-              proc.kill()
-              return
-            }
-          } catch { /* ignore non-JSON */ }
-        }
-      })
-
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve()
-        } else {
-          reject(new Error(`Download failed with code ${code}`))
-        }
-      })
-
-      proc.on('error', (err) => {
-        reject(new Error(`Failed to spawn: ${err.message}`))
       })
     })
   }

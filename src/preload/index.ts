@@ -15,10 +15,6 @@ export interface IElectronAPI {
   saveSetting: (key: string, value: string) => Promise<void>
   getSetting: (key: string) => Promise<string | null>
   onTranscriptionProgress: (callback: (progress: number, message: string) => void) => () => void
-  downloadModel: (model: string) => Promise<{ success: boolean; error?: string }>
-  onDownloadProgress: (callback: (progress: number, message: string) => void) => () => void
-  downloadWhisper: () => Promise<{ success: boolean; error?: string }>
-  onWhisperDownloadProgress: (callback: (progress: number, message: string) => void) => () => void
   getCheckpointStatus: (audioPath: string, model: string) => Promise<{ exists: boolean; completedChunks?: number; totalChunks?: number }>
   deleteCheckpoint: (audioPath: string, model: string) => Promise<void>
 }
@@ -40,19 +36,7 @@ const api: IElectronAPI = {
     ipcRenderer.on('transcription-progress', handler)
     return () => ipcRenderer.removeListener('transcription-progress', handler)
   },
-  downloadModel: (model) => ipcRenderer.invoke('download-model', model),
-  onDownloadProgress: (callback) => {
-    const handler = (_: any, progress: number, message: string) => callback(progress, message)
-    ipcRenderer.on('download-progress', handler)
-    return () => ipcRenderer.removeListener('download-progress', handler)
-  },
-  downloadWhisper: () => ipcRenderer.invoke('download-whisper'),
   transcribeWhisper: (filePath, context) => ipcRenderer.invoke('transcribe-whisper', filePath, context),
-  onWhisperDownloadProgress: (callback) => {
-    const handler = (_: any, progress: number, message: string) => callback(progress, message)
-    ipcRenderer.on('whisper-download-progress', handler)
-    return () => ipcRenderer.removeListener('whisper-download-progress', handler)
-  },
   getCheckpointStatus: (audioPath, model) => ipcRenderer.invoke('get-checkpoint-status', audioPath, model),
   deleteCheckpoint: (audioPath, model) => ipcRenderer.invoke('delete-checkpoint', audioPath, model),
 }
