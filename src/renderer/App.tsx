@@ -118,7 +118,7 @@ function App() {
     })
 
     try {
-      const transcription = await window.electronAPI.transcribeAudio(audioPath, selectedModel)
+      const transcription = await window.electronAPI.transcribeAudio(audioPath, selectedModel, documentText.slice(0, 2000))
       unsubscribe()
 
       if (transcription.error) {

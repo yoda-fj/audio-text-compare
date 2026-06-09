@@ -62,7 +62,7 @@ ipcMain.handle('read-document', async (_, filePath: string, options?: { pageStar
   return fileProcessor.readDocument(filePath, options)
 })
 
-ipcMain.handle('transcribe-audio', async (_, filePath: string, model: string) => {
+ipcMain.handle('transcribe-audio', async (_, filePath: string, model: string, context?: string) => {
   const hfToken = db.getDecryptedSetting('hf_token')
   if (!hfToken) {
     return { text: '', error: 'Hugging Face Token não configurado. Configure em Configurações.' }
@@ -70,6 +70,7 @@ ipcMain.handle('transcribe-audio', async (_, filePath: string, model: string) =>
   try {
     const result = await pythonClient.transcribe(filePath, {
       model,
+      context,
       onProgress: (progress, message) => {
         mainWindow?.webContents.send('transcription-progress', progress, message)
       },

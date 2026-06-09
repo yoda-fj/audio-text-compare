@@ -8,6 +8,7 @@ import { DatabaseManager } from './database'
 export interface TranscribeOptions {
   model?: string
   maxTokens?: number
+  context?: string
 }
 
 export interface TranscribeResult {
@@ -281,6 +282,9 @@ export class PythonClient {
 
     if (options.model) {
       args.push('--model', options.model)
+    }
+    if (options.context && options.context.trim()) {
+      args.push('--context', options.context.trim().slice(0, 2000))
     }
 
     return new Promise((resolve, reject) => {

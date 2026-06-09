@@ -4,7 +4,7 @@ import type { ReadDocumentOptions } from '../renderer/types'
 export interface IElectronAPI {
   selectFile: (options: { filters: { name: string; extensions: string[] }[] }) => Promise<string | null>
   readDocument: (filePath: string, options?: ReadDocumentOptions) => Promise<{ text: string; error?: string }>
-  transcribeAudio: (filePath: string, model: string) => Promise<{ text: string; error?: string }>
+  transcribeAudio: (filePath: string, model: string, context?: string) => Promise<{ text: string; error?: string }>
   compareTexts: (original: string, transcribed: string) => Promise<any[]>
   saveComparison: (data: any) => Promise<number>
   getComparisons: () => Promise<any[]>
@@ -23,7 +23,7 @@ export interface IElectronAPI {
 const api: IElectronAPI = {
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
   readDocument: (filePath, options) => ipcRenderer.invoke('read-document', filePath, options),
-  transcribeAudio: (filePath, model) => ipcRenderer.invoke('transcribe-audio', filePath, model),
+  transcribeAudio: (filePath, model, context) => ipcRenderer.invoke('transcribe-audio', filePath, model, context),
   compareTexts: (original, transcribed) => ipcRenderer.invoke('compare-texts', original, transcribed),
   saveComparison: (data) => ipcRenderer.invoke('save-comparison', data),
   getComparisons: () => ipcRenderer.invoke('get-comparisons'),

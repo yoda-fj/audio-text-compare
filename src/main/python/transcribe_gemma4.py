@@ -44,6 +44,7 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=512, help="Número máximo de tokens a gerar por chunk")
     parser.add_argument("--chunk-duration", type=int, default=30, help="Duração de cada chunk de áudio em segundos")
     parser.add_argument("--checkpoint-file", default="", help="Caminho do arquivo de checkpoint JSON")
+    parser.add_argument("--context", default="", help="Texto do documento original para contextualizar a transcrição")
     parser.add_argument("--hf-token", default="", help="Hugging Face token (ou use env HF_TOKEN)")
     parser.add_argument("--hf-token-stdin", action="store_true", help="Ler HF Token do stdin")
     args = parser.parse_args()
@@ -146,7 +147,17 @@ def main() -> None:
     else:
         log_progress(55, f"Áudio de {total_samples / sr:.0f}s dividido em {total_chunks} chunk(s) de {args.chunk_duration}s...")
 
-    system_prompt = "Transcreva o conteúdo deste áudio em português, palavra por palavra."
+    if args.context and args.context.strip():
+        context_snippet = args.context.strip()[:2000]
+        system_prompt = f"""Você está transcribindo um áudio relacionado ao seguinte documento:
+
+---
+{context_snippet}
+---
+
+Transcreva o conteúdo deste áudio em português, palavra por palavra."""
+    else:
+        system_prompt = "Transcreva o conteúdo deste áudio em português, palavra por palavra."
 
     for i in range(completed_count, total_chunks):
         start = i * chunk_samples
