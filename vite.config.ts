@@ -17,7 +17,11 @@ function copyPythonFiles() {
       if (fs.existsSync(srcDir)) {
         fs.mkdirSync(destDir, { recursive: true })
         for (const file of fs.readdirSync(srcDir)) {
-          fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file))
+          if (file === '__pycache__') continue
+          const srcPath = path.join(srcDir, file)
+          if (fs.statSync(srcPath).isFile()) {
+            fs.copyFileSync(srcPath, path.join(destDir, file))
+          }
         }
       }
     },
