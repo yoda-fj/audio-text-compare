@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Script para transcrição de áudio usando Whisper Large v3 com progresso detalhado."""
+"""Script para transcrição de áudio usando Whisper Large v3 com chunking e progresso."""
 
 import argparse
 import io
 import json
+import math
 import os
 import re
 import sys
 import traceback
 
 try:
+    import numpy as np
     import torch
     import whisper
 except ImportError:
@@ -20,6 +22,11 @@ except ImportError:
         file=sys.stderr,
     )
     sys.exit(1)
+
+
+CHUNK_DURATION = 600  # 10 minutos por chunk
+SAMPLE_RATE = 16000
+OVERLAP_SECONDS = 2  # sobreposição entre chunks para não perder palavras
 
 
 def report_progress(progress: int, message: str) -> None:
@@ -35,8 +42,11 @@ def report_error(message: str) -> None:
 class ProgressCapture:
     """Intercepta o stdout do Whisper e envia progresso em JSON para o stderr."""
 
-    def __init__(self, total_duration: float):
-        self.total_duration = total_duration
+    def __init__(self, chunk_start: float, chunk_end: float, chunk_idx: int, total_chunks: int):
+        self.chunk_start = chunk_start
+        self.chunk_end = chunk_end
+        self.chunk_idx = chunk_idx
+        self.total_chunks = total_chunks
         self._buffer = ""
 
     def write(self, text: str) -> None:
@@ -55,57 +65,54 @@ class ProgressCapture:
         if not line:
             return
 
-        # Detectando idioma
         if "Detecting language" in line:
-            report_progress(32, f"🔍 {line}")
-            return
+            return  # ignora no chunking
 
-        # Segmento de transcrição: [00:00.000 --> 00:05.000]  Texto...
         match = re.match(r"\[(\d+:\d+\.\d+)\s*-->\s*(\d+:\d+\.\d+)\]\s*(.*)", line)
         if match:
-            start_str, end_str, text_seg = match.groups()
-            end_seconds = self._time_to_seconds(end_str)
-            progress = min(95, int(30 + (end_seconds / self.total_duration) * 65))
+            _, end_str, text_seg = match.groups()
+            progress_base = int((self.chunk_idx / self.total_chunks) * 90)
+            progress = min(90, progress_base + 5)
             report_progress(
                 progress,
-                f"[{start_str} --> {end_str}] {text_seg[:80]}{'...' if len(text_seg) > 80 else ''}",
+                f"Chunk {self.chunk_idx + 1}/{self.total_chunks} [{self._fmt_time(self.chunk_start)} --> {self._fmt_time(self.chunk_end)}] {text_seg[:60]}{'...' if len(text_seg) > 60 else ''}",
             )
             return
 
-        # Outras mensagens do whisper
-        report_progress(35, line)
-
     @staticmethod
-    def _time_to_seconds(t: str) -> float:
-        # Formato: MM:SS.mmm ou HH:MM:SS.mmm
-        parts = t.split(":")
-        if len(parts) == 2:
-            m, s = parts
-            return float(m) * 60 + float(s)
-        elif len(parts) == 3:
-            h, m, s = parts
-            return float(h) * 3600 + float(m) * 60 + float(s)
-        return 0.0
+    def _fmt_time(seconds: float) -> str:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m:02d}:{s:02d}"
+
+
+def transcribe_chunk(model, audio_chunk: np.ndarray, language: str, initial_prompt: str | None) -> str:
+    """Transcreve um chunk de áudio."""
+    old_stdout = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        result = model.transcribe(
+            audio_chunk,
+            language=language,
+            initial_prompt=initial_prompt,
+            verbose=False,
+            fp16=False,
+            condition_on_previous_text=True,
+        )
+    finally:
+        sys.stdout = old_stdout
+    return result.get("text", "").strip()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Transcrição de áudio com Whisper")
+    parser = argparse.ArgumentParser(description="Transcrição de áudio com Whisper (chunked)")
     parser.add_argument("--audio", required=True, help="Caminho do arquivo de áudio")
-    parser.add_argument(
-        "--model-dir", required=True, help="Diretório onde o modelo está salvo"
-    )
-    parser.add_argument(
-        "--language", default="pt", help="Idioma do áudio (padrão: pt)"
-    )
-    parser.add_argument(
-        "--context",
-        default=None,
-        help="Texto de contexto do documento para initial_prompt",
-    )
+    parser.add_argument("--model-dir", required=True, help="Diretório onde o modelo está salvo")
+    parser.add_argument("--language", default="pt", help="Idioma do áudio (padrão: pt)")
+    parser.add_argument("--context", default=None, help="Texto de contexto do documento")
     args = parser.parse_args()
 
     try:
-        # Detecta MPS (Apple Silicon) ou CUDA, senão CPU
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda"
@@ -117,34 +124,43 @@ def main() -> None:
         report_progress(10, "Carregando modelo Whisper...")
         model = whisper.load_model(model_path, device=device)
 
-        report_progress(25, "Carregando áudio...")
+        report_progress(20, "Carregando áudio...")
         audio = whisper.load_audio(args.audio)
-        total_duration = len(audio) / 16000.0  # load_audio retorna 16kHz
-        report_progress(28, f"Áudio: {total_duration / 60:.1f} minutos")
+        total_duration = len(audio) / SAMPLE_RATE
+        report_progress(22, f"Áudio: {total_duration / 60:.1f} minutos")
 
-        initial_prompt = args.context if args.context else None
+        # Divide em chunks
+        chunk_samples = CHUNK_DURATION * SAMPLE_RATE
+        overlap_samples = OVERLAP_SECONDS * SAMPLE_RATE
+        total_chunks = max(1, math.ceil((len(audio) - overlap_samples) / (chunk_samples - overlap_samples)))
+        report_progress(25, f"Dividindo em {total_chunks} chunk(s) de ~{CHUNK_DURATION // 60} min...")
 
-        # Intercepta o stdout do Whisper para reportar progresso segmento a segmento
-        progress_capture = ProgressCapture(total_duration)
-        old_stdout = sys.stdout
-        sys.stdout = progress_capture
+        all_texts = []
+        prev_text = args.context if args.context else None
 
-        try:
-            result = model.transcribe(
-                audio,
-                language=args.language,
-                initial_prompt=initial_prompt,
-                verbose=True,  # ativa saída segmento a segmento
-                fp16=False,  # necessário para MPS/CPU
+        for i in range(total_chunks):
+            start_sample = i * (chunk_samples - overlap_samples)
+            end_sample = min(start_sample + chunk_samples, len(audio))
+            chunk = audio[start_sample:end_sample]
+
+            chunk_start_sec = start_sample / SAMPLE_RATE
+            chunk_end_sec = end_sample / SAMPLE_RATE
+
+            report_progress(
+                int(25 + (i / total_chunks) * 65),
+                f"Chunk {i + 1}/{total_chunks} — transcrevendo ({chunk_start_sec / 60:.0f}–{chunk_end_sec / 60:.0f} min)...",
             )
-        finally:
-            sys.stdout = old_stdout
-            progress_capture.flush()
 
-        report_progress(98, "Finalizando transcrição...")
+            text = transcribe_chunk(model, chunk, args.language, prev_text)
+            if text:
+                all_texts.append(text)
+                # Usa os últimos 200 chars do chunk atual como contexto para o próximo
+                prev_text = text[-200:] if len(text) > 200 else text
 
-        text = result.get("text", "").strip()
-        print(json.dumps({"type": "result", "text": text}))
+        report_progress(95, "Finalizando transcrição...")
+
+        full_text = "\n".join(all_texts)
+        print(json.dumps({"type": "result", "text": full_text}))
     except Exception as exc:
         report_error(f"Erro na transcrição com Whisper: {exc}")
         traceback.print_exc(file=sys.stderr)
