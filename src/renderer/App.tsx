@@ -20,7 +20,7 @@ function App() {
   const [progressMessage, setProgressMessage] = useState('')
   const [showHistory, setShowHistory] = useState(false)
   const [pythonStatus, setPythonStatus] = useState<{ ready: boolean; python?: string; message: string } | null>(null)
-  const [selectedModel, setSelectedModel] = useState('google/gemma-4-E2B-it')
+  const [selectedModel, setSelectedModel] = useState('whisper-large-v3')
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)

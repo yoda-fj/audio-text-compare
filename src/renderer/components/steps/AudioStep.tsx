@@ -88,10 +88,10 @@ export default function AudioStep({
             disabled={isProcessing}
             className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white disabled:opacity-50"
           >
-            <option value="google/gemma-4-E2B-it">Gemma 4 E2B — recomendado para 16 GB RAM</option>
+            <option value="whisper-large-v3">Whisper Large v3 — OpenAI (mais rápido, recomendado)</option>
+            <option value="google/gemma-4-E2B-it">Gemma 4 E2B — para 16 GB RAM</option>
             <option value="google/gemma-4-E4B-it">Gemma 4 E4B — equilibrado</option>
             <option value="google/gemma-4-12B-it">Gemma 4 12B — exige mais RAM/VRAM</option>
-            <option value="whisper-large-v3">Whisper Large v3 — OpenAI (mais rápido, sem HF Token)</option>
           </select>
 
           {selectedModel === 'whisper-large-v3' ? (
