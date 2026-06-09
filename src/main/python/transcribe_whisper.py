@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Script para transcrição de áudio usando Whisper Large v3 com chunking e progresso."""
+"""Script para transcrição de áudio usando Whisper Large v3 com chunking e progresso por segmento."""
 
 import argparse
 import io
@@ -26,28 +26,28 @@ except ImportError:
 
 CHUNK_DURATION = 600  # 10 minutos por chunk
 SAMPLE_RATE = 16000
-OVERLAP_SECONDS = 2  # sobreposição entre chunks para não perder palavras
+OVERLAP_SECONDS = 2
 
 
 def report_progress(progress: int, message: str) -> None:
     payload = {"type": "progress", "progress": progress, "message": message}
-    print(json.dumps(payload), file=sys.stderr)
+    print(json.dumps(payload), file=sys.stderr, flush=True)
 
 
 def report_error(message: str) -> None:
     payload = {"type": "error", "message": message}
-    print(json.dumps(payload), file=sys.stderr)
+    print(json.dumps(payload), file=sys.stderr, flush=True)
 
 
-class ProgressCapture:
-    """Intercepta o stdout do Whisper e envia progresso em JSON para o stderr."""
+class SegmentReporter:
+    """Captura os segmentos do Whisper e envia para o stderr com offset de tempo do chunk."""
 
-    def __init__(self, chunk_start: float, chunk_end: float, chunk_idx: int, total_chunks: int):
-        self.chunk_start = chunk_start
-        self.chunk_end = chunk_end
+    def __init__(self, chunk_offset_sec: float, chunk_idx: int, total_chunks: int):
+        self.chunk_offset_sec = chunk_offset_sec
         self.chunk_idx = chunk_idx
         self.total_chunks = total_chunks
         self._buffer = ""
+        self.segments = []
 
     def write(self, text: str) -> None:
         self._buffer += text
@@ -65,42 +65,61 @@ class ProgressCapture:
         if not line:
             return
 
+        # Ignora "Detecting language"
         if "Detecting language" in line:
-            return  # ignora no chunking
+            return
 
+        # Segmento: [00:00.000 --> 00:05.000]  Texto...
         match = re.match(r"\[(\d+:\d+\.\d+)\s*-->\s*(\d+:\d+\.\d+)\]\s*(.*)", line)
         if match:
-            _, end_str, text_seg = match.groups()
-            progress_base = int((self.chunk_idx / self.total_chunks) * 90)
-            progress = min(90, progress_base + 5)
+            start_str, end_str, text_seg = match.groups()
+            start_sec = self._time_to_seconds(start_str) + self.chunk_offset_sec
+            end_sec = self._time_to_seconds(end_str) + self.chunk_offset_sec
+            self.segments.append(text_seg)
+
+            progress = min(95, int(25 + ((self.chunk_idx + (end_sec - self.chunk_offset_sec) / CHUNK_DURATION) / self.total_chunks) * 65))
             report_progress(
                 progress,
-                f"Chunk {self.chunk_idx + 1}/{self.total_chunks} [{self._fmt_time(self.chunk_start)} --> {self._fmt_time(self.chunk_end)}] {text_seg[:60]}{'...' if len(text_seg) > 60 else ''}",
+                f"[{self._fmt_time(start_sec)} --> {self._fmt_time(end_sec)}] {text_seg}",
             )
-            return
+
+    @staticmethod
+    def _time_to_seconds(t: str) -> float:
+        parts = t.split(":")
+        if len(parts) == 2:
+            m, s = parts
+            return float(m) * 60 + float(s)
+        elif len(parts) == 3:
+            h, m, s = parts
+            return float(h) * 3600 + float(m) * 60 + float(s)
+        return 0.0
 
     @staticmethod
     def _fmt_time(seconds: float) -> str:
-        m = int(seconds // 60)
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
         s = int(seconds % 60)
+        if h > 0:
+            return f"{h:02d}:{m:02d}:{s:02d}"
         return f"{m:02d}:{s:02d}"
 
 
-def transcribe_chunk(model, audio_chunk: np.ndarray, language: str, initial_prompt: str | None) -> str:
-    """Transcreve um chunk de áudio."""
+def transcribe_chunk(model, audio_chunk: np.ndarray, language: str, initial_prompt: str | None, reporter: SegmentReporter) -> str:
+    """Transcreve um chunk de áudio reportando cada segmento."""
     old_stdout = sys.stdout
-    sys.stdout = io.StringIO()
+    sys.stdout = reporter
     try:
         result = model.transcribe(
             audio_chunk,
             language=language,
             initial_prompt=initial_prompt,
-            verbose=False,
+            verbose=True,  # ativa saída segmento a segmento
             fp16=False,
             condition_on_previous_text=True,
         )
     finally:
         sys.stdout = old_stdout
+        reporter.flush()
     return result.get("text", "").strip()
 
 
@@ -142,19 +161,17 @@ def main() -> None:
             start_sample = i * (chunk_samples - overlap_samples)
             end_sample = min(start_sample + chunk_samples, len(audio))
             chunk = audio[start_sample:end_sample]
-
-            chunk_start_sec = start_sample / SAMPLE_RATE
-            chunk_end_sec = end_sample / SAMPLE_RATE
+            chunk_offset_sec = start_sample / SAMPLE_RATE
 
             report_progress(
                 int(25 + (i / total_chunks) * 65),
-                f"Chunk {i + 1}/{total_chunks} — transcrevendo ({chunk_start_sec / 60:.0f}–{chunk_end_sec / 60:.0f} min)...",
+                f"Chunk {i + 1}/{total_chunks} — iniciando ({chunk_offset_sec / 60:.0f} min)...",
             )
 
-            text = transcribe_chunk(model, chunk, args.language, prev_text)
+            reporter = SegmentReporter(chunk_offset_sec, i, total_chunks)
+            text = transcribe_chunk(model, chunk, args.language, prev_text, reporter)
             if text:
                 all_texts.append(text)
-                # Usa os últimos 200 chars do chunk atual como contexto para o próximo
                 prev_text = text[-200:] if len(text) > 200 else text
 
         report_progress(95, "Finalizando transcrição...")
