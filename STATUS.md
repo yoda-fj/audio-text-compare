@@ -63,11 +63,12 @@ openai-whisper
 
 ## Como testar na retomada
 
-1. `npm run dev`
-2. Na UI, selecionar documento e áudio com fala real.
-3. Inserir HF Token válido (com licença do modelo aceita no HF).
-4. Escolher modelo `Gemma 4 E2B` (recomendado para 16 GB RAM).
-5. Clicar em "Transcrever áudio" e aguardar (pode demorar bastante na primeira vez).
+1. `npm run prepare-assets` (copia modelos do cache para `assets/models/`)
+2. `npm run dev`
+3. Na UI, selecionar documento e áudio com fala real.
+4. Inserir HF Token válido (apenas para modelos Gemma 4).
+5. Escolher modelo `Whisper Large v3` (mais rápido) ou `Gemma 4 E2B`.
+6. Clicar em "Transcrever áudio" e aguardar.
 
 ## 🐛 Correções recentes
 
@@ -78,30 +79,32 @@ openai-whisper
 - Área de configurações segura implementada: HF Token criptografado via `safeStorage` do Electron e armazenado no SQLite.
 - Token não é mais passado por argumento de linha de comando; uso de arquivo temporário com `--hf-token-file`.
 - UI com modal de configurações e indicadores visuais de status do token.
-- Download antecipado do modelo disponível na tela de configurações, com barra de progresso, via `src/main/python/download_model.py` usando `huggingface_hub.snapshot_download`.
-- HF Token agora é passado dos processos Node/Python via **stdin** (`--hf-token-stdin`), eliminando completamente arquivos temporários e race conditions.
-- Adicionado fallback de criptografia AES-256-CBC quando `safeStorage` do Electron não está disponível (problema comum no macOS dev com Keychain).
-- Testado `npm run dev`: app sobe sem erros críticos; download do modelo via stdin funciona corretamente.
-- Testada transcrição com modelo E2B: funcionou e gerou texto em português.
+- HF Token é passado dos processos Node/Python via **stdin** (`--hf-token-stdin`), eliminando completamente arquivos temporários e race conditions.
+- Adicionado fallback de criptografia AES-256-CBC quando `safeStorage` do Electron não está disponível.
 - Modelo padrão alterado para `google/gemma-4-E2B-it` (evita OOM em 16 GB RAM).
 - Removida mensagem redundante sobre HF Token da tela de transcrição (status já aparece no header).
-- Implementado **chunking de áudio** em `transcribe_gemma4.py`: áudios longos são divididos em chunks de 30s e transcritos chunk a chunk, corrigindo o problema de transcrição incompleta.
-- Progresso da transcrição agora mostra a **mensagem real** do backend (ex: "Transcrevendo chunk 1/171...") em vez de mensagens genéricas fixas.
-- Implementado **checkpoint/retomada** de transcrição: cada chunk processado é salvo em `~/Library/Application Support/audio-text-compare/transcription_checkpoints/`. Se o processo for interrompido (máquina dorme, crash, etc.), clicar em "Transcrever" novamente retoma de onde parou.
-- UI exibe aviso amarelo com contador de chunks quando existe checkpoint disponível, com botões "Retomar transcrição" e "Descartar e recomeçar".
-- Texto do documento original (primeiro step) é enviado como **contexto** para o modelo Gemma 4 durante a transcrição, melhorando o reconhecimento de termos específicos e vocabulário do documento.
-- **Modo economia de memória** automático: em máquinas com menos de 20 GB RAM, o script Python força mais offload de camadas do modelo para o disco (`max_memory`, `offload_state_dict`), evitando OOM (erro "code null").
+- Implementado **chunking de áudio** em `transcribe_gemma4.py`: áudios longos são divididos em chunks de 30s e transcritos chunk a chunk.
+- Progresso da transcrição mostra a **mensagem real** do backend (ex: "Transcrevendo chunk 1/171...").
+- Implementado **checkpoint/retomada** de transcrição: cada chunk processado é salvo em `~/Library/Application Support/audio-text-compare/transcription_checkpoints/`.
+- UI exibe aviso amarelo com contador de chunks quando existe checkpoint disponível.
+- Texto do documento original (primeiro step) é enviado como **contexto** para o modelo Gemma 4 durante a transcrição.
+- **Modo economia de memória** automático: em máquinas com menos de 20 GB RAM, o script Python força mais offload para o disco (`max_memory`, `offload_state_dict`), evitando OOM (erro "code null").
 - **Whisper Large v3** integrado como alternativa ao Gemma 4:
-  - Scripts `download_whisper.py` e `transcribe_whisper.py` criados.
-  - Modelo pode ser embutido no pacote do app ou baixado posteriormente.
+  - Script `transcribe_whisper.py` criado com suporte a MPS (Apple Silicon) e `fp16=False`.
   - Seleção de modelo no step de áudio (Gemma 4 ou Whisper).
-  - Download do modelo Whisper disponível na tela de configurações, com progresso.
   - Whisper não requer HF Token e processa o áudio inteiro sem chunking.
-- **Modelos podem ser embutidos no pacote do app** via `assets/models/`:
+- **Modelos são embutidos no pacote do app** via `assets/models/`:
   - `assets/models/whisper/large-v3.pt` — modelo Whisper (≈3 GB).
   - `assets/models/huggingface/` — cache do Hugging Face com modelos Gemma.
   - Configurado em `electron-builder.json5` (`extraResources`) e resolvido em runtime via `process.resourcesPath`.
-  - Se o modelo não estiver no pacote, o app baixa automaticamente para `userData`.
+  - Script `npm run prepare-assets` copia modelos do cache do usuário para `assets/models/` antes do build.
+  - Removidos botões de download da UI e APIs de download do backend.
+- **Modelos são embutidos no pacote do app** via `assets/models/`:
+  - `assets/models/whisper/large-v3.pt` — modelo Whisper (≈3 GB).
+  - `assets/models/huggingface/` — cache do Hugging Face com modelos Gemma.
+  - Configurado em `electron-builder.json5` (`extraResources`) e resolvido em runtime via `process.resourcesPath`.
+  - Script `npm run prepare-assets` copia modelos do cache do usuário para `assets/models/` antes do build.
+  - App não faz mais download de modelos em runtime — tudo vem no instalador.
 
 ## Próximos passos pendentes (opcional)
 

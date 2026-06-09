@@ -98,7 +98,7 @@ export default function AudioStep({
 
           {selectedModel === 'whisper-large-v3' ? (
             <p className="text-xs text-gray-500 mt-2">
-              O Whisper processa o áudio inteiro de uma vez (sem chunking). Mais rápido e não requer token do Hugging Face. Requer o modelo baixado em Configurações.
+              O Whisper processa o áudio inteiro de uma vez (sem chunking). Mais rápido e não requer token do Hugging Face.
             </p>
           ) : (
             <p className="text-xs text-gray-500 mt-2">

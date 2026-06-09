@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings, Eye, EyeOff, X, Download, CheckCircle, AlertCircle, Mic } from 'lucide-react'
-import ProgressBar from './ProgressBar'
+import { Settings, Eye, EyeOff, X } from 'lucide-react'
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -8,30 +7,11 @@ interface SettingsModalProps {
   onSaved?: () => void
 }
 
-const MODEL_OPTIONS = [
-  'google/gemma-4-12B-it',
-  'google/gemma-4-E2B-it',
-  'google/gemma-4-E4B-it',
-]
-
 export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) {
   const [token, setToken] = useState('')
   const [showToken, setShowToken] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-
-  const [model, setModel] = useState(MODEL_OPTIONS[0])
-  const [downloading, setDownloading] = useState(false)
-  const [downloadProgress, setDownloadProgress] = useState(0)
-  const [downloadMessage, setDownloadMessage] = useState('')
-  const [downloadError, setDownloadError] = useState<string | null>(null)
-  const [downloadSuccess, setDownloadSuccess] = useState(false)
-
-  const [whisperDownloading, setWhisperDownloading] = useState(false)
-  const [whisperDownloadProgress, setWhisperDownloadProgress] = useState(0)
-  const [whisperDownloadMessage, setWhisperDownloadMessage] = useState('')
-  const [whisperDownloadError, setWhisperDownloadError] = useState<string | null>(null)
-  const [whisperDownloadSuccess, setWhisperDownloadSuccess] = useState(false)
 
   useEffect(() => {
     if (!isOpen) return
@@ -46,14 +26,6 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
     }
     load()
     setSaved(false)
-    setDownloadError(null)
-    setDownloadSuccess(false)
-    setDownloadProgress(0)
-    setDownloadMessage('')
-    setWhisperDownloadError(null)
-    setWhisperDownloadSuccess(false)
-    setWhisperDownloadProgress(0)
-    setWhisperDownloadMessage('')
     return () => {
       cancelled = true
     }
@@ -75,75 +47,6 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
       console.error('Erro ao salvar configuração:', err)
     } finally {
       setSaving(false)
-    }
-  }
-
-  const handleDownload = async () => {
-    setDownloading(true)
-    setDownloadProgress(0)
-    setDownloadMessage('')
-    setDownloadError(null)
-    setDownloadSuccess(false)
-
-    // Ensure the token is persisted before downloading; the backend reads it from the encrypted store.
-    if (!token.trim()) {
-      setDownloadError('Informe o Hugging Face Token antes de baixar o modelo.')
-      setDownloading(false)
-      return
-    }
-    try {
-      await window.electronAPI.saveSetting('hf_token', token)
-      onSaved?.()
-    } catch (err) {
-      setDownloadError('Não foi possível salvar o token. Tente novamente.')
-      setDownloading(false)
-      return
-    }
-
-    const unsubscribe = window.electronAPI.onDownloadProgress((progress, message) => {
-      setDownloadProgress(progress)
-      setDownloadMessage(message)
-    })
-
-    try {
-      const result = await window.electronAPI.downloadModel(model)
-      unsubscribe()
-      if (!result.success) {
-        throw new Error(result.error || 'Falha no download do modelo.')
-      }
-      setDownloadSuccess(true)
-    } catch (err) {
-      setDownloadError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setDownloading(false)
-      unsubscribe()
-    }
-  }
-
-  const handleWhisperDownload = async () => {
-    setWhisperDownloading(true)
-    setWhisperDownloadProgress(0)
-    setWhisperDownloadMessage('')
-    setWhisperDownloadError(null)
-    setWhisperDownloadSuccess(false)
-
-    const unsubscribe = window.electronAPI.onWhisperDownloadProgress((progress, message) => {
-      setWhisperDownloadProgress(progress)
-      setWhisperDownloadMessage(message)
-    })
-
-    try {
-      const result = await window.electronAPI.downloadWhisper()
-      unsubscribe()
-      if (!result.success) {
-        throw new Error(result.error || 'Falha no download do modelo Whisper.')
-      }
-      setWhisperDownloadSuccess(true)
-    } catch (err) {
-      setWhisperDownloadError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setWhisperDownloading(false)
-      unsubscribe()
     }
   }
 
@@ -187,7 +90,7 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
             </button>
           </div>
           <p className="text-xs text-gray-500">
-            O token é necessário para baixar o modelo Gemma 4. Crie um token em{' '}
+            O token é necessário para os modelos Gemma 4. Crie um token em{' '}
             <a
               href="https://huggingface.co/settings/tokens"
               target="_blank"
@@ -200,101 +103,18 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
           </p>
         </div>
 
-        <div className="space-y-2">
-          <label htmlFor="model-select" className="block text-sm font-medium text-gray-700">
-            Modelo Gemma 4
-          </label>
-          <select
-            id="model-select"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={downloading}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm bg-white"
-          >
-            {MODEL_OPTIONS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={handleDownload}
-            disabled={downloading || !token.trim()}
-            className="btn-primary w-full flex items-center justify-center gap-2"
-          >
-            {downloading ? (
-              <>Baixando...</>
-            ) : (
-              <>
-                <Download className="w-4 h-4" />
-                Baixar modelo
-              </>
-            )}
-          </button>
-
-          {downloading && (
-            <div className="pt-1">
-              <ProgressBar progress={downloadProgress} label={downloadMessage || 'Progresso do download'} />
-            </div>
-          )}
-
-          {downloadError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{downloadError}</span>
-            </div>
-          )}
-
-          {downloadSuccess && (
-            <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-start gap-2">
-              <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>Modelo baixado com sucesso!</span>
-            </div>
-          )}
-        </div>
-
         <div className="space-y-2 pt-2 border-t border-gray-200">
-          <label className="block text-sm font-medium text-gray-700 flex items-center gap-2">
-            <Mic className="w-4 h-4 text-gray-500" />
-            Modelo Whisper
-          </label>
+          <h3 className="text-sm font-medium text-gray-700">Modelos disponíveis</h3>
           <p className="text-xs text-gray-500">
-            O Whisper Large v3 da OpenAI roda localmente e não requer token do Hugging Face. É geralmente mais rápido e consome menos memória que o Gemma 4.
+            Os modelos de transcrição são embutidos no instalador do app.
           </p>
-          <button
-            onClick={handleWhisperDownload}
-            disabled={whisperDownloading}
-            className="btn-primary w-full flex items-center justify-center gap-2"
-          >
-            {whisperDownloading ? (
-              <>Baixando...</>
-            ) : (
-              <>
-                <Download className="w-4 h-4" />
-                Baixar Whisper Large v3
-              </>
-            )}
-          </button>
-
-          {whisperDownloading && (
-            <div className="pt-1">
-              <ProgressBar progress={whisperDownloadProgress} label={whisperDownloadMessage || 'Progresso do download'} />
-            </div>
-          )}
-
-          {whisperDownloadError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{whisperDownloadError}</span>
-            </div>
-          )}
-
-          {whisperDownloadSuccess && (
-            <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-start gap-2">
-              <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>Whisper Large v3 baixado com sucesso!</span>
-            </div>
-          )}
+          <ul className="text-xs text-gray-600 list-disc list-inside space-y-1">
+            <li>Whisper Large v3 (OpenAI)</li>
+            <li>Gemma 4 E2B / E4B / 12B (Google)</li>
+          </ul>
+          <p className="text-xs text-gray-500">
+            O Hugging Face Token é necessário apenas para os modelos Gemma 4.
+          </p>
         </div>
 
         {saved && (
