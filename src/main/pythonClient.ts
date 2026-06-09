@@ -34,6 +34,7 @@ function findExistingVenv(): string | null {
 
 export class PythonClient {
   private _venvDir: string | null = null
+  private _isTranscribing = false
 
   private get venvDir(): string {
     if (!this._venvDir) {
@@ -221,6 +222,11 @@ export class PythonClient {
     audioPath: string,
     options: TranscribeOptions & { onProgress?: (progress: number, message: string) => void }
   ): Promise<TranscribeResult> {
+    if (this._isTranscribing) {
+      return Promise.reject(new Error('Uma transcrição já está em andamento. Aguarde ou cancele a anterior.'))
+    }
+    this._isTranscribing = true
+
     const venvPython = await this.ensureVenvReady()
     const scriptPath = this.resolvePythonScript('transcribe_gemma4.py')
     const checkpointPath = this.getCheckpointPath(audioPath, options.model ?? '')
@@ -275,6 +281,7 @@ export class PythonClient {
       })
 
       proc.on('close', (code) => {
+        this._isTranscribing = false
         // Flush remaining stderr buffer
         if (stderrBuffer.trim()) {
           try {
@@ -316,6 +323,7 @@ export class PythonClient {
       })
 
       proc.on('error', (err) => {
+        this._isTranscribing = false
         reject(new Error(`Failed to spawn transcription script: ${err.message}`))
       })
     })
@@ -325,6 +333,11 @@ export class PythonClient {
     audioPath: string,
     options: { context?: string; onProgress?: (progress: number, message: string) => void } = {}
   ): Promise<TranscribeResult> {
+    if (this._isTranscribing) {
+      return Promise.reject(new Error('Uma transcrição já está em andamento. Aguarde ou cancele a anterior.'))
+    }
+    this._isTranscribing = true
+
     const venvPython = await this.ensureVenvReady()
     const scriptPath = this.resolvePythonScript('transcribe_whisper.py')
     const modelDir = this.getWhisperModelDir()
@@ -370,6 +383,7 @@ export class PythonClient {
       })
 
       proc.on('close', (code) => {
+        this._isTranscribing = false
         // flush remaining stderr
         if (stderrBuffer.trim()) {
           try {
@@ -405,6 +419,7 @@ export class PythonClient {
       })
 
       proc.on('error', (err) => {
+        this._isTranscribing = false
         reject(new Error(`Failed to spawn: ${err.message}`))
       })
     })
