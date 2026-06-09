@@ -93,10 +93,15 @@ openai-whisper
 - **Modo economia de memória** automático: em máquinas com menos de 20 GB RAM, o script Python força mais offload de camadas do modelo para o disco (`max_memory`, `offload_state_dict`), evitando OOM (erro "code null").
 - **Whisper Large v3** integrado como alternativa ao Gemma 4:
   - Scripts `download_whisper.py` e `transcribe_whisper.py` criados.
-  - Modelo baixado para `~/Library/Application Support/audio-text-compare/models/whisper/` (dentro do diretório do app).
+  - Modelo pode ser embutido no pacote do app ou baixado posteriormente.
   - Seleção de modelo no step de áudio (Gemma 4 ou Whisper).
   - Download do modelo Whisper disponível na tela de configurações, com progresso.
   - Whisper não requer HF Token e processa o áudio inteiro sem chunking.
+- **Modelos podem ser embutidos no pacote do app** via `assets/models/`:
+  - `assets/models/whisper/large-v3.pt` — modelo Whisper (≈3 GB).
+  - `assets/models/huggingface/` — cache do Hugging Face com modelos Gemma.
+  - Configurado em `electron-builder.json5` (`extraResources`) e resolvido em runtime via `process.resourcesPath`.
+  - Se o modelo não estiver no pacote, o app baixa automaticamente para `userData`.
 
 ## Próximos passos pendentes (opcional)
 

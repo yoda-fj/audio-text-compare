@@ -48,6 +48,7 @@ def main() -> None:
     parser.add_argument("--low-memory", action="store_true", help="Força mais offload para disco (mais lento, usa menos RAM)")
     parser.add_argument("--hf-token", default="", help="Hugging Face token (ou use env HF_TOKEN)")
     parser.add_argument("--hf-token-stdin", action="store_true", help="Ler HF Token do stdin")
+    parser.add_argument("--cache-dir", default="", help="Diretório de cache do Hugging Face (para modelos embutidos no pacote)")
     args = parser.parse_args()
 
     if not os.path.exists(args.audio):
@@ -123,26 +124,31 @@ def main() -> None:
     os.makedirs(offload_dir, exist_ok=True)
 
     try:
-        processor = Gemma4Processor.from_pretrained(args.model, token=hf_token)
-        if not checkpoint and not low_memory:
-            log_progress(30, "Processor loaded. Loading model weights...")
-
-        load_kwargs: dict = {
+        processor_kwargs: dict = {"token": hf_token}
+        model_kwargs: dict = {
             "torch_dtype": dtype,
             "token": hf_token,
             "low_cpu_mem_usage": True,
         }
+        if args.cache_dir:
+            processor_kwargs["cache_dir"] = args.cache_dir
+            model_kwargs["cache_dir"] = args.cache_dir
+
+        processor = Gemma4Processor.from_pretrained(args.model, **processor_kwargs)
+        if not checkpoint and not low_memory:
+            log_progress(30, "Processor loaded. Loading model weights...")
+
         if device != "cpu":
             if low_memory:
                 # Força mais camadas para o disco quando há pouca RAM
-                load_kwargs["device_map"] = "auto"
-                load_kwargs["offload_folder"] = offload_dir
-                load_kwargs["offload_state_dict"] = True
-                load_kwargs["max_memory"] = {0: "4GiB", "cpu": "6GiB"}
+                model_kwargs["device_map"] = "auto"
+                model_kwargs["offload_folder"] = offload_dir
+                model_kwargs["offload_state_dict"] = True
+                model_kwargs["max_memory"] = {0: "4GiB", "cpu": "6GiB"}
             else:
-                load_kwargs["device_map"] = "auto"
-                load_kwargs["offload_folder"] = offload_dir
-        model = Gemma4ForConditionalGeneration.from_pretrained(args.model, **load_kwargs)
+                model_kwargs["device_map"] = "auto"
+                model_kwargs["offload_folder"] = offload_dir
+        model = Gemma4ForConditionalGeneration.from_pretrained(args.model, **model_kwargs)
         if device == "cpu":
             model = model.to(device)
     except Exception as e:

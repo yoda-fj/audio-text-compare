@@ -6,6 +6,7 @@
     buildResources: "build",
   },
   files: ["dist", "package.json"],
+  extraResources: ["assets/models/**"],
   mac: {
     target: ["dmg", "zip"],
     category: "public.app-category.productivity",

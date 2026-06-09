@@ -28,6 +28,7 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="ID do modelo no Hugging Face")
     parser.add_argument("--hf-token-stdin", action="store_true", help="Ler HF Token do stdin")
     parser.add_argument("--hf-token", default="", help="HF Token (legado)")
+    parser.add_argument("--cache-dir", default="", help="Diretório de cache do Hugging Face (para modelos embutidos no pacote)")
     args = parser.parse_args()
 
     hf_token = None
@@ -65,12 +66,15 @@ def main() -> None:
 
     try:
         reporter_thread.start()
-        snapshot_download(
-            repo_id=args.model,
-            token=hf_token,
-            resume_download=True,
-            repo_type="model",
-        )
+        download_kwargs: dict = {
+            "repo_id": args.model,
+            "token": hf_token,
+            "resume_download": True,
+            "repo_type": "model",
+        }
+        if args.cache_dir:
+            download_kwargs["cache_dir"] = args.cache_dir
+        snapshot_download(**download_kwargs)
     except Exception as e:
         stop_event["stop"] = True
         log_error(f"Falha no download: {e}")

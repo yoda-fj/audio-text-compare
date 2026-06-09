@@ -69,6 +69,29 @@ export class PythonClient {
     return path.join(__dirname, '../python', name)
   }
 
+  private getModelBaseDir(): string {
+    // Models shipped inside the app package (extraResources) take priority.
+    // In dev: project_root/assets/models
+    // In production: app.resourcesPath/assets/models
+    const isDev = !!process.env.VITE_DEV_SERVER_URL
+    if (isDev) {
+      return path.join(process.cwd(), 'assets', 'models')
+    }
+    return path.join(process.resourcesPath, 'assets', 'models')
+  }
+
+  private getWhisperModelDir(): string {
+    const dir = path.join(this.getModelBaseDir(), 'whisper')
+    fs.mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  private getHuggingFaceCacheDir(): string {
+    const dir = path.join(this.getModelBaseDir(), 'huggingface')
+    fs.mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
   isVenvReady(): boolean {
     return fs.existsSync(this.venvPythonPath)
   }
@@ -174,10 +197,12 @@ export class PythonClient {
       throw new Error('Hugging Face Token não configurado.')
     }
 
+    const cacheDir = this.getHuggingFaceCacheDir()
+
     return new Promise((resolve, reject) => {
       const proc = spawn(
         venvPython,
-        [scriptPath, '--model', model, '--hf-token-stdin'],
+        [scriptPath, '--model', model, '--hf-token-stdin', '--cache-dir', cacheDir],
         { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
       )
 
@@ -272,12 +297,15 @@ export class PythonClient {
     const scriptPath = this.resolvePythonScript('transcribe_gemma4.py')
     const checkpointPath = this.getCheckpointPath(audioPath, options.model ?? '')
 
+    const cacheDir = this.getHuggingFaceCacheDir()
+
     const args: string[] = [
       scriptPath,
       '--audio', audioPath,
       '--max-tokens', String(options.maxTokens ?? 512),
       '--hf-token-stdin',
       '--checkpoint-file', checkpointPath,
+      '--cache-dir', cacheDir,
     ]
 
     if (options.model) {
@@ -369,12 +397,6 @@ export class PythonClient {
         reject(new Error(`Failed to spawn transcription script: ${err.message}`))
       })
     })
-  }
-
-  private getWhisperModelDir(): string {
-    const dir = path.join(app.getPath('userData'), 'models', 'whisper')
-    fs.mkdirSync(dir, { recursive: true })
-    return dir
   }
 
   async downloadWhisperModel(
