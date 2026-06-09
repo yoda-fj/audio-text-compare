@@ -84,6 +84,7 @@ pillow
 - Implementado **chunking de áudio** em `transcribe_gemma4.py`: áudios longos são divididos em chunks de 30s e transcritos chunk a chunk, corrigindo o problema de transcrição incompleta.
 - Progresso da transcrição agora mostra a **mensagem real** do backend (ex: "Transcrevendo chunk 1/171...") em vez de mensagens genéricas fixas.
 - Implementado **checkpoint/retomada** de transcrição: cada chunk processado é salvo em `~/Library/Application Support/audio-text-compare/transcription_checkpoints/`. Se o processo for interrompido (máquina dorme, crash, etc.), clicar em "Transcrever" novamente retoma de onde parou.
+- UI exibe aviso amarelo com contador de chunks quando existe checkpoint disponível, com botões "Retomar transcrição" e "Descartar e recomeçar".
 
 ## Próximos passos pendentes (opcional)
 

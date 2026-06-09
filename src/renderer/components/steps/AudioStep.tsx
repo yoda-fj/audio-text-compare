@@ -1,9 +1,13 @@
+import { useState, useEffect } from 'react'
 import {
   FileAudio,
   ArrowLeft,
   ArrowRight,
   Mic,
   Settings,
+  RotateCcw,
+  Trash2,
+  AlertCircle,
 } from 'lucide-react'
 import FileDropzone from '../FileDropzone'
 import ProgressBar from '../ProgressBar'
@@ -39,6 +43,27 @@ export default function AudioStep({
   onCompare,
   onBack,
 }: AudioStepProps) {
+  const [checkpoint, setCheckpoint] = useState<{ exists: boolean; completedChunks?: number; totalChunks?: number } | null>(null)
+
+  useEffect(() => {
+    if (!audioPath) {
+      setCheckpoint(null)
+      return
+    }
+    let cancelled = false
+    window.electronAPI.getCheckpointStatus(audioPath, selectedModel).then((status) => {
+      if (!cancelled) setCheckpoint(status)
+    }).catch(() => {
+      if (!cancelled) setCheckpoint(null)
+    })
+    return () => { cancelled = true }
+  }, [audioPath, selectedModel])
+
+  const handleDiscard = async () => {
+    if (!audioPath) return
+    await window.electronAPI.deleteCheckpoint(audioPath, selectedModel)
+    setCheckpoint(null)
+  }
   return (
     <div className="animate-fade-in space-y-6">
       <FileDropzone
@@ -76,6 +101,40 @@ export default function AudioStep({
         </div>
       </div>
 
+      {checkpoint && checkpoint.exists && !isProcessing && (
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg space-y-3">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-yellow-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-yellow-800">
+                Transcrição anterior interrompida
+              </p>
+              <p className="text-sm text-yellow-700 mt-1">
+                {checkpoint.completedChunks} de {checkpoint.totalChunks} chunk(s) já processado(s).
+                Clique em <strong>Retomar</strong> para continuar de onde parou.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={onTranscribe}
+              disabled={!isHfTokenConfigured}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Retomar transcrição
+            </button>
+            <button
+              onClick={handleDiscard}
+              className="btn-secondary flex items-center gap-2 text-red-600 border-red-200 hover:bg-red-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              Descartar e recomeçar
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-center">
         <button
           onClick={onTranscribe}
@@ -87,6 +146,11 @@ export default function AudioStep({
             <>
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
               Processando...
+            </>
+          ) : checkpoint && checkpoint.exists ? (
+            <>
+              <RotateCcw className="w-5 h-5" />
+              Retomar transcrição
             </>
           ) : (
             <>
