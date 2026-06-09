@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Script para transcrição de áudio usando Whisper Large v3 com progresso segmento a segmento."""
+"""Script para transcrição de áudio usando Whisper Large v3 com progresso por segmento."""
 
 import argparse
 import json
@@ -31,8 +31,8 @@ def report_error(message: str) -> None:
     print(json.dumps(payload), file=sys.stderr, flush=True)
 
 
-class SegmentReporter:
-    """Intercepta o stdout do Whisper e envia cada segmento como progresso JSON."""
+class SegmentCapture:
+    """Redireciona sys.stdout para capturar os segmentos do Whisper em tempo real."""
 
     def __init__(self, total_duration: float):
         self.total_duration = total_duration
@@ -54,14 +54,18 @@ class SegmentReporter:
         if not line:
             return
 
-        if "Detecting language" in line:
+        if "Detecting language" in line or "Detected language" in line:
             report_progress(30, f"🔍 {line}")
             return
 
-        match = re.match(r"\[(\d+:\d+\.\d+)\s*-->\s*(\d+:\d+\.\d+)\]\s*(.*)", line)
+        # Regex que aceita tanto MM:SS.mmm quanto HH:MM:SS.mmm
+        match = re.match(
+            r"\[(\d+:\d+(?::\d+)?\.\d+)\s*-->\s*(\d+:\d+(?::\d+)?\.\d+)\]\s*(.*)",
+            line,
+        )
         if match:
             start_str, end_str, text_seg = match.groups()
-            end_sec = self._time_to_seconds(end_str)
+            end_sec = self._parse_time(end_str)
             progress = min(95, int(30 + (end_sec / self.total_duration) * 65))
             report_progress(
                 progress,
@@ -70,7 +74,7 @@ class SegmentReporter:
             return
 
     @staticmethod
-    def _time_to_seconds(t: str) -> float:
+    def _parse_time(t: str) -> float:
         parts = t.split(":")
         if len(parts) == 2:
             m, s = parts
@@ -116,22 +120,22 @@ def main() -> None:
 
         initial_prompt = args.context if args.context else None
 
-        # Intercepta o stdout do Whisper para reportar progresso segmento a segmento
-        reporter = SegmentReporter(total_duration)
+        # Captura o stdout do Whisper para reportar segmentos em tempo real
+        capture = SegmentCapture(total_duration)
         old_stdout = sys.stdout
-        sys.stdout = reporter
+        sys.stdout = capture
 
         try:
             result = model.transcribe(
                 audio,
                 language=args.language,
                 initial_prompt=initial_prompt,
-                verbose=True,
+                verbose=True,  # ativa saída segmento a segmento
                 fp16=False,
             )
         finally:
             sys.stdout = old_stdout
-            reporter.flush()
+            capture.flush()
 
         report_progress(98, "Finalizando transcrição...")
 
