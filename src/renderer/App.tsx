@@ -23,14 +23,12 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
-  const [hasHfToken, setHasHfToken] = useState(false)
   const [pdfPageStart, setPdfPageStart] = useState<number | ''>('')
   const [pdfPageEnd, setPdfPageEnd] = useState<number | ''>('')
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1)
 
   useEffect(() => {
     checkPython()
-    checkHfToken()
   }, [])
 
   const checkPython = async () => {
@@ -38,14 +36,6 @@ function App() {
     setPythonStatus(status)
   }
 
-  const checkHfToken = async () => {
-    try {
-      const value = await window.electronAPI.getSetting('hf_token')
-      setHasHfToken(Boolean(value && value.trim()))
-    } catch {
-      setHasHfToken(false)
-    }
-  }
 
   const clearDocument = () => {
     setDocumentPath(null)
@@ -243,15 +233,7 @@ function App() {
                 {pythonStatus.ready ? 'Python pronto' : pythonStatus.message}
               </div>
             )}
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${
-                hasHfToken ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-              }`}
-              title={hasHfToken ? 'HF Token configurado' : 'HF Token não configurado'}
-            >
-              {hasHfToken ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
-              {hasHfToken ? 'HF Token configurado' : 'HF Token não configurado'}
-            </div>
+
             <button
               onClick={handleReset}
               className="btn-secondary flex items-center gap-2"
@@ -329,7 +311,6 @@ function App() {
               audioPath={audioPath}
               transcribedText={transcribedText}
               selectedModel={selectedModel}
-              isHfTokenConfigured={hasHfToken}
               isProcessing={isProcessing}
               progress={progress}
               progressMessage={progressMessage}
@@ -366,7 +347,6 @@ function App() {
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
-        onSaved={checkHfToken}
       />
     </div>
   )

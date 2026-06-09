@@ -16,7 +16,6 @@ interface AudioStepProps {
   audioPath: string | null
   transcribedText: string
   selectedModel: string
-  isHfTokenConfigured: boolean
   isProcessing: boolean
   progress: number
   progressMessage?: string
@@ -32,7 +31,6 @@ export default function AudioStep({
   audioPath,
   transcribedText,
   selectedModel,
-  isHfTokenConfigured,
   isProcessing,
   progress,
   progressMessage,
@@ -125,8 +123,7 @@ export default function AudioStep({
           <div className="flex gap-3">
             <button
               onClick={onTranscribe}
-              disabled={!isHfTokenConfigured}
-              className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn-primary flex items-center gap-2"
             >
               <RotateCcw className="w-4 h-4" />
               Retomar transcrição
@@ -145,8 +142,8 @@ export default function AudioStep({
       <div className="flex justify-center">
         <button
           onClick={onTranscribe}
-          disabled={!audioPath || (selectedModel !== 'whisper-large-v3' && !isHfTokenConfigured) || isProcessing}
-          title={!audioPath ? 'Selecione um áudio' : (selectedModel !== 'whisper-large-v3' && !isHfTokenConfigured) ? 'Configure o HF Token' : 'Iniciar transcrição'}
+          disabled={!audioPath || isProcessing}
+          title={!audioPath ? 'Selecione um áudio' : 'Iniciar transcrição'}
           className="btn-primary flex items-center gap-2 text-lg px-8 py-3 shadow-lg shadow-primary-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isProcessing ? (
