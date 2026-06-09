@@ -112,6 +112,14 @@ ipcMain.handle('check-python-status', async () => {
   return pythonClient.checkStatus()
 })
 
+ipcMain.handle('get-checkpoint-status', async (_, audioPath: string, model: string) => {
+  return pythonClient.getCheckpointStatus(audioPath, model)
+})
+
+ipcMain.handle('delete-checkpoint', async (_, audioPath: string, model: string) => {
+  pythonClient.deleteCheckpoint(audioPath, model)
+})
+
 ipcMain.handle('download-model', async (_, model: string) => {
   try {
     await pythonClient.downloadModel(model, {

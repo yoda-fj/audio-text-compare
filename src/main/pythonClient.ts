@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { spawn, spawnSync } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
+import * as crypto from 'crypto'
 import { DatabaseManager } from './database'
 
 export interface TranscribeOptions {
@@ -223,6 +224,40 @@ export class PythonClient {
     })
   }
 
+  private getCheckpointPath(audioPath: string, model: string): string {
+    const checkpointsDir = path.join(app.getPath('userData'), 'transcription_checkpoints')
+    fs.mkdirSync(checkpointsDir, { recursive: true })
+    const hash = crypto.createHash('sha256').update(`${audioPath}:${model}`).digest('hex').slice(0, 16)
+    const audioName = path.basename(audioPath, path.extname(audioPath))
+    return path.join(checkpointsDir, `${audioName}_${hash}.json`)
+  }
+
+  getCheckpointStatus(audioPath: string, model: string): { exists: boolean; completedChunks?: number; totalChunks?: number } {
+    const checkpointPath = this.getCheckpointPath(audioPath, model)
+    if (!fs.existsSync(checkpointPath)) {
+      return { exists: false }
+    }
+    try {
+      const data = JSON.parse(fs.readFileSync(checkpointPath, 'utf-8'))
+      const completed = data.results?.length ?? 0
+      const total = data.total_chunks ?? 0
+      return { exists: completed > 0, completedChunks: completed, totalChunks: total }
+    } catch {
+      return { exists: false }
+    }
+  }
+
+  deleteCheckpoint(audioPath: string, model: string): void {
+    const checkpointPath = this.getCheckpointPath(audioPath, model)
+    try {
+      if (fs.existsSync(checkpointPath)) {
+        fs.unlinkSync(checkpointPath)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   async transcribe(
     audioPath: string,
     options: TranscribeOptions & { onProgress?: (progress: number, message: string) => void }
@@ -234,12 +269,14 @@ export class PythonClient {
 
     const venvPython = await this.ensureVenvReady()
     const scriptPath = this.resolvePythonScript('transcribe_gemma4.py')
+    const checkpointPath = this.getCheckpointPath(audioPath, options.model ?? '')
 
     const args: string[] = [
       scriptPath,
       '--audio', audioPath,
       '--max-tokens', String(options.maxTokens ?? 512),
       '--hf-token-stdin',
+      '--checkpoint-file', checkpointPath,
     ]
 
     if (options.model) {
@@ -301,6 +338,8 @@ export class PythonClient {
           try {
             const result = JSON.parse(lastStdoutLine)
             if (result.type === 'result' && typeof result.text === 'string') {
+              // Delete checkpoint on success
+              try { fs.unlinkSync(checkpointPath) } catch { /* ignore */ }
               resolve({ text: result.text })
               return
             }

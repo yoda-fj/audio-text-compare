@@ -16,6 +16,8 @@ export interface IElectronAPI {
   onTranscriptionProgress: (callback: (progress: number, message: string) => void) => () => void
   downloadModel: (model: string) => Promise<{ success: boolean; error?: string }>
   onDownloadProgress: (callback: (progress: number, message: string) => void) => () => void
+  getCheckpointStatus: (audioPath: string, model: string) => Promise<{ exists: boolean; completedChunks?: number; totalChunks?: number }>
+  deleteCheckpoint: (audioPath: string, model: string) => Promise<void>
 }
 
 const api: IElectronAPI = {
@@ -41,6 +43,8 @@ const api: IElectronAPI = {
     ipcRenderer.on('download-progress', handler)
     return () => ipcRenderer.removeListener('download-progress', handler)
   },
+  getCheckpointStatus: (audioPath, model) => ipcRenderer.invoke('get-checkpoint-status', audioPath, model),
+  deleteCheckpoint: (audioPath, model) => ipcRenderer.invoke('delete-checkpoint', audioPath, model),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

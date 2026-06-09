@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI script for audio transcription using Gemma 4 with chunking support."""
+"""CLI script for audio transcription using Gemma 4 with chunking and checkpoint support."""
 
 import argparse
 import json
@@ -19,12 +19,31 @@ def log_error(message: str) -> None:
     print(json.dumps({"type": "error", "message": message}), file=sys.stderr, flush=True)
 
 
+def load_checkpoint(checkpoint_path: str) -> dict:
+    if not os.path.exists(checkpoint_path):
+        return {}
+    try:
+        with open(checkpoint_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_checkpoint(checkpoint_path: str, data: dict) -> None:
+    try:
+        with open(checkpoint_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log_error(f"Falha ao salvar checkpoint: {e}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Transcreve áudio usando Gemma 4")
     parser.add_argument("--audio", required=True, help="Caminho do arquivo de áudio")
     parser.add_argument("--model", default="google/gemma-4-12B-it", help="ID do modelo no Hugging Face")
     parser.add_argument("--max-tokens", type=int, default=512, help="Número máximo de tokens a gerar por chunk")
     parser.add_argument("--chunk-duration", type=int, default=30, help="Duração de cada chunk de áudio em segundos")
+    parser.add_argument("--checkpoint-file", default="", help="Caminho do arquivo de checkpoint JSON")
     parser.add_argument("--hf-token", default="", help="Hugging Face token (ou use env HF_TOKEN)")
     parser.add_argument("--hf-token-stdin", action="store_true", help="Ler HF Token do stdin")
     args = parser.parse_args()
@@ -47,6 +66,18 @@ def main() -> None:
         log_error("Hugging Face Token é obrigatório. Configure o token no aplicativo.")
         sys.exit(1)
 
+    # Load checkpoint if available
+    checkpoint = {}
+    checkpoint_path = args.checkpoint_file
+    if checkpoint_path:
+        checkpoint = load_checkpoint(checkpoint_path)
+        if checkpoint.get("audio") == args.audio and checkpoint.get("model") == args.model:
+            completed = len(checkpoint.get("results", []))
+            if completed > 0:
+                log_progress(10, f"Retomando transcrição: {completed} chunk(s) já processado(s)...")
+        else:
+            checkpoint = {}
+
     try:
         from transformers import Gemma4Processor, Gemma4ForConditionalGeneration
     except ImportError as e:
@@ -64,7 +95,10 @@ def main() -> None:
         device = "cpu"
         dtype = torch.float32
 
-    log_progress(10, "Loading model...")
+    if not checkpoint:
+        log_progress(10, "Loading model...")
+    else:
+        log_progress(10, "Loading model (retomando)...")
 
     # Diretório temporário para offload de pesos quando a memória não for suficiente
     offload_dir = os.path.join(os.path.dirname(__file__), "model_offload")
@@ -72,7 +106,8 @@ def main() -> None:
 
     try:
         processor = Gemma4Processor.from_pretrained(args.model, token=hf_token)
-        log_progress(30, "Processor loaded. Loading model weights...")
+        if not checkpoint:
+            log_progress(30, "Processor loaded. Loading model weights...")
 
         load_kwargs: dict = {
             "torch_dtype": dtype,
@@ -89,7 +124,8 @@ def main() -> None:
         log_error(f"Falha ao carregar modelo: {e}")
         sys.exit(1)
 
-    log_progress(50, "Model loaded. Loading audio...")
+    if not checkpoint:
+        log_progress(50, "Model loaded. Loading audio...")
 
     try:
         audio, sr = librosa.load(args.audio, sr=16000, mono=True)
@@ -101,12 +137,18 @@ def main() -> None:
     chunk_samples = args.chunk_duration * sr
     total_chunks = max(1, math.ceil(total_samples / chunk_samples))
 
-    log_progress(55, f"Áudio de {total_samples / sr:.0f}s dividido em {total_chunks} chunk(s) de {args.chunk_duration}s...")
+    # Restore checkpoint state
+    results = checkpoint.get("results", [])
+    completed_count = len(results)
+
+    if completed_count > 0:
+        log_progress(55, f"Retomando: {completed_count}/{total_chunks} chunks já processados. Continuando...")
+    else:
+        log_progress(55, f"Áudio de {total_samples / sr:.0f}s dividido em {total_chunks} chunk(s) de {args.chunk_duration}s...")
 
     system_prompt = "Transcreva o conteúdo deste áudio em português, palavra por palavra."
-    transcriptions: list[str] = []
 
-    for i in range(total_chunks):
+    for i in range(completed_count, total_chunks):
         start = i * chunk_samples
         end = min(start + chunk_samples, total_samples)
         chunk = audio[start:end]
@@ -114,7 +156,7 @@ def main() -> None:
         progress_start = 60
         progress_end = 95
         chunk_progress = progress_start + int(((i + 1) / total_chunks) * (progress_end - progress_start))
-        log_progress(chunk_progress, f"Transcrevendo chunk {i + 1}/{total_chunks}...")
+        log_progress(chunk_progress, f"Chunk {i + 1}/{total_chunks} — transcrevendo...")
 
         try:
             messages = [
@@ -148,14 +190,23 @@ def main() -> None:
             generate_ids = generate_ids[:, inputs["input_ids"].shape[1]:]
             chunk_text = processor.batch_decode(generate_ids, skip_special_tokens=True)[0]
             if chunk_text.strip():
-                transcriptions.append(chunk_text.strip())
+                results.append(chunk_text.strip())
         except Exception as e:
             log_error(f"Falha na geração da transcrição no chunk {i + 1}: {e}")
             sys.exit(1)
 
+        # Save checkpoint after each chunk
+        if checkpoint_path:
+            save_checkpoint(checkpoint_path, {
+                "audio": args.audio,
+                "model": args.model,
+                "total_chunks": total_chunks,
+                "results": results,
+            })
+
     log_progress(100, "Transcription complete.")
 
-    full_text = " ".join(transcriptions)
+    full_text = " ".join(results)
     result = {"type": "result", "text": full_text}
     print(json.dumps(result), flush=True)
 
