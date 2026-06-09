@@ -20,12 +20,12 @@ Transcrição de áudio com Gemma 4 via Hugging Face transformers localmente.
   - Cria venv automaticamente em `~/Library/Application Support/Electron/python_env`.
   - Instala dependências automaticamente.
   - Executa `transcribe_gemma4.py` ou `transcribe_whisper.py` conforme modelo selecionado.
-- Campo de HF Token adicionado na UI (criptografado no SQLite).
 - Status do ambiente Python exibido no header.
 - Banco SQLite e histórico funcionam.
 - Teste local realizado com sucesso:
   - Modelo: `google/gemma-4-E2B-it`
   - Resultado: pipeline completa funcionou (modelo carregou, gerou transcrição, retornou JSON válido).
+  - Modelo carrega sem HF Token usando `local_files_only=True` quando está no cache local.
 
 ### ⚠️ Limitações conhecidas
 
@@ -66,9 +66,8 @@ openai-whisper
 1. `npm run prepare-assets` (copia modelos do cache para `assets/models/`)
 2. `npm run dev`
 3. Na UI, selecionar documento e áudio com fala real.
-4. Inserir HF Token válido (apenas para modelos Gemma 4).
-5. Escolher modelo `Whisper Large v3` (mais rápido) ou `Gemma 4 E2B`.
-6. Clicar em "Transcrever áudio" e aguardar.
+4. Escolher modelo `Whisper Large v3` (mais rápido) ou `Gemma 4 E2B`.
+5. Clicar em "Transcrever áudio" e aguardar.
 
 ## 🐛 Correções recentes
 
@@ -79,8 +78,6 @@ openai-whisper
 - Área de configurações segura implementada: HF Token criptografado via `safeStorage` do Electron e armazenado no SQLite.
 - Token não é mais passado por argumento de linha de comando; uso de arquivo temporário com `--hf-token-file`.
 - UI com modal de configurações e indicadores visuais de status do token.
-- HF Token é passado dos processos Node/Python via **stdin** (`--hf-token-stdin`), eliminando completamente arquivos temporários e race conditions.
-- Adicionado fallback de criptografia AES-256-CBC quando `safeStorage` do Electron não está disponível.
 - Modelo padrão alterado para `google/gemma-4-E2B-it` (evita OOM em 16 GB RAM).
 - Removida mensagem redundante sobre HF Token da tela de transcrição (status já aparece no header).
 - Implementado **chunking de áudio** em `transcribe_gemma4.py`: áudios longos são divididos em chunks de 30s e transcritos chunk a chunk.
