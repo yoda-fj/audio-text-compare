@@ -370,4 +370,150 @@ export class PythonClient {
       })
     })
   }
+
+  private getWhisperModelDir(): string {
+    const dir = path.join(app.getPath('userData'), 'models', 'whisper')
+    fs.mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  async downloadWhisperModel(
+    options: { onProgress?: (progress: number, message: string) => void } = {}
+  ): Promise<void> {
+    const venvPython = await this.ensureVenvReady()
+    const scriptPath = this.resolvePythonScript('download_whisper.py')
+    const modelDir = this.getWhisperModelDir()
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn(
+        venvPython,
+        [scriptPath, '--model-dir', modelDir],
+        { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
+      )
+
+      let stderrBuffer = ''
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        stderrBuffer += chunk.toString('utf-8')
+        const lines = stderrBuffer.split(/\r?\n/)
+        stderrBuffer = lines.pop() ?? ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const parsed = JSON.parse(trimmed)
+            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
+              options.onProgress(parsed.progress, parsed.message || '')
+            }
+            if (parsed.type === 'error') {
+              reject(new Error(parsed.message || 'Download failed'))
+              proc.kill()
+              return
+            }
+          } catch { /* ignore non-JSON */ }
+        }
+      })
+
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve()
+        } else {
+          reject(new Error(`Download failed with code ${code}`))
+        }
+      })
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to spawn: ${err.message}`))
+      })
+    })
+  }
+
+  async transcribeWhisper(
+    audioPath: string,
+    options: { context?: string; onProgress?: (progress: number, message: string) => void } = {}
+  ): Promise<TranscribeResult> {
+    const venvPython = await this.ensureVenvReady()
+    const scriptPath = this.resolvePythonScript('transcribe_whisper.py')
+    const modelDir = this.getWhisperModelDir()
+
+    const args: string[] = [
+      scriptPath,
+      '--audio', audioPath,
+      '--model-dir', modelDir,
+      '--language', 'pt',
+    ]
+    if (options.context && options.context.trim()) {
+      args.push('--context', options.context.trim().slice(0, 2000))
+    }
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn(
+        venvPython,
+        args,
+        { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
+      )
+
+      let stdoutData = ''
+      let stderrBuffer = ''
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        stdoutData += chunk.toString('utf-8')
+      })
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        stderrBuffer += chunk.toString('utf-8')
+        const lines = stderrBuffer.split(/\r?\n/)
+        stderrBuffer = lines.pop() ?? ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const parsed = JSON.parse(trimmed)
+            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
+              options.onProgress(parsed.progress, parsed.message || '')
+            }
+          } catch { /* ignore */ }
+        }
+      })
+
+      proc.on('close', (code) => {
+        // flush remaining stderr
+        if (stderrBuffer.trim()) {
+          try {
+            const parsed = JSON.parse(stderrBuffer.trim())
+            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
+              options.onProgress(parsed.progress, parsed.message || '')
+            }
+          } catch { /* ignore */ }
+        }
+
+        const lastStdoutLine = stdoutData.trim().split(/\r?\n/).pop()
+        if (code === 0 && lastStdoutLine) {
+          try {
+            const result = JSON.parse(lastStdoutLine)
+            if (result.type === 'result' && typeof result.text === 'string') {
+              resolve({ text: result.text })
+              return
+            }
+          } catch { /* fall through */ }
+        }
+
+        const lastStderrLine = stderrBuffer.trim().split(/\r?\n/).pop() || ''
+        let errorMessage = `Transcription failed with code ${code}`
+        if (lastStderrLine) {
+          try {
+            const err = JSON.parse(lastStderrLine)
+            if (err.message) errorMessage = err.message
+          } catch {
+            errorMessage = stderrBuffer.trim() || stdoutData.trim() || errorMessage
+          }
+        }
+        reject(new Error(errorMessage))
+      })
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to spawn: ${err.message}`))
+      })
+    })
+  }
 }

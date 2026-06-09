@@ -133,3 +133,30 @@ ipcMain.handle('download-model', async (_, model: string) => {
     return { success: false, error: error.message || String(error) }
   }
 })
+
+ipcMain.handle('download-whisper', async () => {
+  try {
+    await pythonClient.downloadWhisperModel({
+      onProgress: (progress, message) => {
+        mainWindow?.webContents.send('whisper-download-progress', progress, message)
+      },
+    })
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message || String(error) }
+  }
+})
+
+ipcMain.handle('transcribe-whisper', async (_, filePath: string, context?: string) => {
+  try {
+    const result = await pythonClient.transcribeWhisper(filePath, {
+      context,
+      onProgress: (progress, message) => {
+        mainWindow?.webContents.send('transcription-progress', progress, message)
+      },
+    })
+    return result
+  } catch (error: any) {
+    return { text: '', error: error.message || String(error) }
+  }
+})
