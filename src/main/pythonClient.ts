@@ -32,9 +32,12 @@ function findExistingVenv(): string | null {
   return null
 }
 
+import type { ChildProcess } from 'child_process'
+
 export class PythonClient {
   private _venvDir: string | null = null
   private _isTranscribing = false
+  private _transcriptionProc: ChildProcess | null = null
 
   private get venvDir(): string {
     if (!this._venvDir) {
@@ -254,6 +257,7 @@ export class PythonClient {
         args,
         { env: { ...process.env, PYTHONUNBUFFERED: '1' } }
       )
+      this._transcriptionProc = proc
 
       let stdoutData = ''
       let stderrBuffer = ''
@@ -282,6 +286,7 @@ export class PythonClient {
 
       proc.on('close', (code) => {
         this._isTranscribing = false
+        this._transcriptionProc = null
         // Flush remaining stderr buffer
         if (stderrBuffer.trim()) {
           try {
@@ -324,6 +329,7 @@ export class PythonClient {
 
       proc.on('error', (err) => {
         this._isTranscribing = false
+        this._transcriptionProc = null
         reject(new Error(`Failed to spawn transcription script: ${err.message}`))
       })
     })
@@ -358,6 +364,7 @@ export class PythonClient {
         args,
         { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
       )
+      this._transcriptionProc = proc
 
       let stdoutData = ''
       let stderrBuffer = ''
@@ -384,6 +391,7 @@ export class PythonClient {
 
       proc.on('close', (code) => {
         this._isTranscribing = false
+        this._transcriptionProc = null
         // flush remaining stderr
         if (stderrBuffer.trim()) {
           try {
@@ -420,8 +428,21 @@ export class PythonClient {
 
       proc.on('error', (err) => {
         this._isTranscribing = false
+        this._transcriptionProc = null
         reject(new Error(`Failed to spawn: ${err.message}`))
       })
     })
+  }
+
+  cancelTranscription(): void {
+    if (this._transcriptionProc) {
+      try {
+        this._transcriptionProc.kill('SIGTERM')
+      } catch {
+        // ignore
+      }
+      this._transcriptionProc = null
+    }
+    this._isTranscribing = false
   }
 }

@@ -133,6 +133,11 @@ function App() {
     }
   }
 
+  const handleCancelTranscription = () => {
+    window.electronAPI.cancelTranscription()
+    setIsProcessing(false)
+  }
+
   const handleCompareFromStep = async () => {
     if (!documentText || !transcribedText) return
 
@@ -354,6 +359,7 @@ function App() {
         isOpen={isProcessing && currentStep === 2}
         progress={progress}
         progressMessage={progressMessage}
+        onCancel={handleCancelTranscription}
       />
     </div>
   )

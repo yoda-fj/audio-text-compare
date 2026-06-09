@@ -117,6 +117,10 @@ ipcMain.handle('delete-checkpoint', async (_, audioPath: string, model: string) 
   pythonClient.deleteCheckpoint(audioPath, model)
 })
 
+ipcMain.handle('cancel-transcription', async () => {
+  pythonClient.cancelTranscription()
+})
+
 ipcMain.handle('transcribe-whisper', async (_, filePath: string, context?: string) => {
   try {
     const result = await pythonClient.transcribeWhisper(filePath, {

@@ -17,6 +17,7 @@ export interface IElectronAPI {
   onTranscriptionProgress: (callback: (progress: number, message: string) => void) => () => void
   getCheckpointStatus: (audioPath: string, model: string) => Promise<{ exists: boolean; completedChunks?: number; totalChunks?: number }>
   deleteCheckpoint: (audioPath: string, model: string) => Promise<void>
+  cancelTranscription: () => Promise<void>
 }
 
 const api: IElectronAPI = {
@@ -39,6 +40,7 @@ const api: IElectronAPI = {
   transcribeWhisper: (filePath, context) => ipcRenderer.invoke('transcribe-whisper', filePath, context),
   getCheckpointStatus: (audioPath, model) => ipcRenderer.invoke('get-checkpoint-status', audioPath, model),
   deleteCheckpoint: (audioPath, model) => ipcRenderer.invoke('delete-checkpoint', audioPath, model),
+  cancelTranscription: () => ipcRenderer.invoke('cancel-transcription'),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)
