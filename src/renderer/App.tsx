@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { FileAudio, History, CheckCircle, AlertCircle, Trash2, Settings } from 'lucide-react'
 import HistoryPanel from './components/HistoryPanel'
 import SettingsModal from './components/SettingsModal'
+import TranscriptionModal from './components/TranscriptionModal'
 import StepIndicator from './components/steps/StepIndicator'
 import DocumentStep from './components/steps/DocumentStep'
 import AudioStep from './components/steps/AudioStep'
@@ -347,6 +348,12 @@ function App() {
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
+      />
+
+      <TranscriptionModal
+        isOpen={isProcessing && currentStep === 2}
+        progress={progress}
+        progressMessage={progressMessage}
       />
     </div>
   )
