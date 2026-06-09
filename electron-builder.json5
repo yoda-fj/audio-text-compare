@@ -1,0 +1,20 @@
+{
+  appId: "com.eddie.audiotextcompare",
+  productName: "Audio Text Compare",
+  directories: {
+    output: "release",
+    buildResources: "build",
+  },
+  files: ["dist", "package.json"],
+  mac: {
+    target: ["dmg", "zip"],
+    category: "public.app-category.productivity",
+  },
+  win: {
+    target: ["nsis", "portable"],
+  },
+  linux: {
+    target: ["AppImage", "deb"],
+    category: "Office",
+  },
+}

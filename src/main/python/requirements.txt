@@ -1,0 +1,9 @@
+transformers>=5.10.0
+torch
+torchvision
+accelerate
+librosa
+soundfile
+numpy
+pillow
+huggingface_hub
