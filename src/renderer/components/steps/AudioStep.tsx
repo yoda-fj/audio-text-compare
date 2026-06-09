@@ -81,7 +81,7 @@ export default function AudioStep({
           <div className="flex items-center gap-2">
             <Settings className="w-5 h-5 text-gray-500" />
             <label className="text-sm font-medium text-gray-700">
-              Modelo Gemma 4:
+              Modelo de transcrição:
             </label>
           </div>
           <select
@@ -93,15 +93,22 @@ export default function AudioStep({
             <option value="google/gemma-4-E2B-it">Gemma 4 E2B — recomendado para 16 GB RAM</option>
             <option value="google/gemma-4-E4B-it">Gemma 4 E4B — equilibrado</option>
             <option value="google/gemma-4-12B-it">Gemma 4 12B — exige mais RAM/VRAM</option>
+            <option value="whisper-large-v3">Whisper Large v3 — OpenAI (mais rápido, sem HF Token)</option>
           </select>
 
-          <p className="text-xs text-gray-500 mt-2">
-            A primeira transcrição pode demorar enquanto o modelo é carregado na memória. Em máquinas com 16 GB de RAM prefira o modelo <strong>E2B</strong>.
-          </p>
+          {selectedModel === 'whisper-large-v3' ? (
+            <p className="text-xs text-gray-500 mt-2">
+              O Whisper processa o áudio inteiro de uma vez (sem chunking). Mais rápido e não requer token do Hugging Face. Requer o modelo baixado em Configurações.
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 mt-2">
+              A primeira transcrição pode demorar enquanto o modelo é carregado na memória. Em máquinas com 16 GB de RAM prefira o modelo <strong>E2B</strong>.
+            </p>
+          )}
         </div>
       </div>
 
-      {checkpoint && checkpoint.exists && !isProcessing && (
+      {selectedModel !== 'whisper-large-v3' && checkpoint && checkpoint.exists && !isProcessing && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg space-y-3">
           <div className="flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-yellow-600 shrink-0 mt-0.5" />
@@ -138,8 +145,8 @@ export default function AudioStep({
       <div className="flex justify-center">
         <button
           onClick={onTranscribe}
-          disabled={!audioPath || !isHfTokenConfigured || isProcessing}
-          title={!audioPath ? 'Selecione um áudio' : !isHfTokenConfigured ? 'Configure o HF Token' : 'Iniciar transcrição'}
+          disabled={!audioPath || (selectedModel !== 'whisper-large-v3' && !isHfTokenConfigured) || isProcessing}
+          title={!audioPath ? 'Selecione um áudio' : (selectedModel !== 'whisper-large-v3' && !isHfTokenConfigured) ? 'Configure o HF Token' : 'Iniciar transcrição'}
           className="btn-primary flex items-center gap-2 text-lg px-8 py-3 shadow-lg shadow-primary-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isProcessing ? (
@@ -147,7 +154,7 @@ export default function AudioStep({
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
               Processando...
             </>
-          ) : checkpoint && checkpoint.exists ? (
+          ) : selectedModel !== 'whisper-large-v3' && checkpoint && checkpoint.exists ? (
             <>
               <RotateCcw className="w-5 h-5" />
               Retomar transcrição
@@ -171,10 +178,17 @@ export default function AudioStep({
           <p className="text-center text-sm text-gray-600 font-medium">
             {progressMessage || 'Processando...'}
           </p>
-          <p className="text-center text-xs text-yellow-600 bg-yellow-50 border border-yellow-200 rounded-lg p-2">
-            ⚠️ Cada chunk pode levar <strong>2–5 minutos</strong> dependendo do hardware.
-            Não feche o aplicativo nem deixe a máquina dormir durante a transcrição.
-          </p>
+          {selectedModel === 'whisper-large-v3' ? (
+            <p className="text-center text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded-lg p-2">
+              O Whisper está processando o áudio completo. Isso pode levar alguns minutos dependendo do tamanho do arquivo.
+              Não feche o aplicativo durante a transcrição.
+            </p>
+          ) : (
+            <p className="text-center text-xs text-yellow-600 bg-yellow-50 border border-yellow-200 rounded-lg p-2">
+              ⚠️ Cada chunk pode levar <strong>2–5 minutos</strong> dependendo do hardware.
+              Não feche o aplicativo nem deixe a máquina dormir durante a transcrição.
+            </p>
+          )}
         </div>
       )}
 

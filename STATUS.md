@@ -13,12 +13,15 @@ Transcrição de áudio com Gemma 4 via Hugging Face transformers localmente.
 
 - App Electron sobe em dev (`npm run dev`) e build (`npm run build`) passam.
 - UI refatorada para wizard de 3 passos (Documento → Áudio → Resultado).
-- Integração Python/Gemma 4 implementada via `PythonClient`:
+- **Dois modelos de transcrição disponíveis**:
+  - **Gemma 4** (E2B/E4B/12B) via Hugging Face transformers — requer HF Token.
+  - **Whisper Large v3** via OpenAI whisper — mais rápido, não requer HF Token.
+- Integração Python implementada via `PythonClient`:
   - Cria venv automaticamente em `~/Library/Application Support/Electron/python_env`.
   - Instala dependências automaticamente.
-  - Executa `src/main/python/transcribe_gemma4.py` para transcrição.
-- Campo de HF Token adicionado na UI (salvo no localStorage).
-- Status do ambiente Python exibido no header (substituiu status Ollama).
+  - Executa `transcribe_gemma4.py` ou `transcribe_whisper.py` conforme modelo selecionado.
+- Campo de HF Token adicionado na UI (criptografado no SQLite).
+- Status do ambiente Python exibido no header.
 - Banco SQLite e histórico funcionam.
 - Teste local realizado com sucesso:
   - Modelo: `google/gemma-4-E2B-it`
@@ -55,6 +58,7 @@ librosa
 soundfile
 numpy
 pillow
+openai-whisper
 ```
 
 ## Como testar na retomada
@@ -87,10 +91,17 @@ pillow
 - UI exibe aviso amarelo com contador de chunks quando existe checkpoint disponível, com botões "Retomar transcrição" e "Descartar e recomeçar".
 - Texto do documento original (primeiro step) é enviado como **contexto** para o modelo Gemma 4 durante a transcrição, melhorando o reconhecimento de termos específicos e vocabulário do documento.
 - **Modo economia de memória** automático: em máquinas com menos de 20 GB RAM, o script Python força mais offload de camadas do modelo para o disco (`max_memory`, `offload_state_dict`), evitando OOM (erro "code null").
+- **Whisper Large v3** integrado como alternativa ao Gemma 4:
+  - Scripts `download_whisper.py` e `transcribe_whisper.py` criados.
+  - Modelo baixado para `~/Library/Application Support/audio-text-compare/models/whisper/` (dentro do diretório do app).
+  - Seleção de modelo no step de áudio (Gemma 4 ou Whisper).
+  - Download do modelo Whisper disponível na tela de configurações, com progresso.
+  - Whisper não requer HF Token e processa o áudio inteiro sem chunking.
 
 ## Próximos passos pendentes (opcional)
 
-- Testar transcrição com áudio real contendo fala.
+- Testar transcrição com Whisper Large v3 usando áudio real de 85 min.
+- Testar transcrição com Gemma 4 em áudio real contendo fala.
 - Adicionar indicador de tempo estimado na UI.
 - Testar modelo 12B em máquina com mais RAM.
 - Adicionar tratamento específico para erro de memória na UI.

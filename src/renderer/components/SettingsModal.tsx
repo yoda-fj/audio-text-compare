@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings, Eye, EyeOff, X, Download, CheckCircle, AlertCircle } from 'lucide-react'
+import { Settings, Eye, EyeOff, X, Download, CheckCircle, AlertCircle, Mic } from 'lucide-react'
 import ProgressBar from './ProgressBar'
 
 interface SettingsModalProps {
@@ -27,6 +27,12 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [downloadSuccess, setDownloadSuccess] = useState(false)
 
+  const [whisperDownloading, setWhisperDownloading] = useState(false)
+  const [whisperDownloadProgress, setWhisperDownloadProgress] = useState(0)
+  const [whisperDownloadMessage, setWhisperDownloadMessage] = useState('')
+  const [whisperDownloadError, setWhisperDownloadError] = useState<string | null>(null)
+  const [whisperDownloadSuccess, setWhisperDownloadSuccess] = useState(false)
+
   useEffect(() => {
     if (!isOpen) return
     let cancelled = false
@@ -44,6 +50,10 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
     setDownloadSuccess(false)
     setDownloadProgress(0)
     setDownloadMessage('')
+    setWhisperDownloadError(null)
+    setWhisperDownloadSuccess(false)
+    setWhisperDownloadProgress(0)
+    setWhisperDownloadMessage('')
     return () => {
       cancelled = true
     }
@@ -106,6 +116,33 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
       setDownloadError(err instanceof Error ? err.message : String(err))
     } finally {
       setDownloading(false)
+      unsubscribe()
+    }
+  }
+
+  const handleWhisperDownload = async () => {
+    setWhisperDownloading(true)
+    setWhisperDownloadProgress(0)
+    setWhisperDownloadMessage('')
+    setWhisperDownloadError(null)
+    setWhisperDownloadSuccess(false)
+
+    const unsubscribe = window.electronAPI.onWhisperDownloadProgress((progress, message) => {
+      setWhisperDownloadProgress(progress)
+      setWhisperDownloadMessage(message)
+    })
+
+    try {
+      const result = await window.electronAPI.downloadWhisper()
+      unsubscribe()
+      if (!result.success) {
+        throw new Error(result.error || 'Falha no download do modelo Whisper.')
+      }
+      setWhisperDownloadSuccess(true)
+    } catch (err) {
+      setWhisperDownloadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setWhisperDownloading(false)
       unsubscribe()
     }
   }
@@ -212,6 +249,50 @@ export default function SettingsModal({ isOpen, onClose, onSaved }: SettingsModa
             <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-start gap-2">
               <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>Modelo baixado com sucesso!</span>
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-2 pt-2 border-t border-gray-200">
+          <label className="block text-sm font-medium text-gray-700 flex items-center gap-2">
+            <Mic className="w-4 h-4 text-gray-500" />
+            Modelo Whisper
+          </label>
+          <p className="text-xs text-gray-500">
+            O Whisper Large v3 da OpenAI roda localmente e não requer token do Hugging Face. É geralmente mais rápido e consome menos memória que o Gemma 4.
+          </p>
+          <button
+            onClick={handleWhisperDownload}
+            disabled={whisperDownloading}
+            className="btn-primary w-full flex items-center justify-center gap-2"
+          >
+            {whisperDownloading ? (
+              <>Baixando...</>
+            ) : (
+              <>
+                <Download className="w-4 h-4" />
+                Baixar Whisper Large v3
+              </>
+            )}
+          </button>
+
+          {whisperDownloading && (
+            <div className="pt-1">
+              <ProgressBar progress={whisperDownloadProgress} label={whisperDownloadMessage || 'Progresso do download'} />
+            </div>
+          )}
+
+          {whisperDownloadError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{whisperDownloadError}</span>
+            </div>
+          )}
+
+          {whisperDownloadSuccess && (
+            <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-start gap-2">
+              <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>Whisper Large v3 baixado com sucesso!</span>
             </div>
           )}
         </div>

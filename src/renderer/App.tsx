@@ -118,7 +118,12 @@ function App() {
     })
 
     try {
-      const transcription = await window.electronAPI.transcribeAudio(audioPath, selectedModel, documentText.slice(0, 2000))
+      let transcription: { text: string; error?: string }
+      if (selectedModel === 'whisper-large-v3') {
+        transcription = await window.electronAPI.transcribeWhisper(audioPath, documentText.slice(0, 2000))
+      } else {
+        transcription = await window.electronAPI.transcribeAudio(audioPath, selectedModel, documentText.slice(0, 2000))
+      }
       unsubscribe()
 
       if (transcription.error) {
@@ -235,7 +240,7 @@ function App() {
                 ) : (
                   <AlertCircle className="w-4 h-4" />
                 )}
-                {pythonStatus.ready ? 'Gemma/Python pronto' : pythonStatus.message}
+                {pythonStatus.ready ? 'Python pronto' : pythonStatus.message}
               </div>
             )}
             <div
