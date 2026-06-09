@@ -171,6 +171,10 @@ export default function AudioStep({
           <p className="text-center text-sm text-gray-600 font-medium">
             {progressMessage || 'Processando...'}
           </p>
+          <p className="text-center text-xs text-yellow-600 bg-yellow-50 border border-yellow-200 rounded-lg p-2">
+            ⚠️ Cada chunk pode levar <strong>2–5 minutos</strong> dependendo do hardware.
+            Não feche o aplicativo nem deixe a máquina dormir durante a transcrição.
+          </p>
         </div>
       )}
 
