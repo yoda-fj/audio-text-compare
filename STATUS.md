@@ -82,6 +82,7 @@ pillow
 - Modelo padrão alterado para `google/gemma-4-E2B-it` (evita OOM em 16 GB RAM).
 - Removida mensagem redundante sobre HF Token da tela de transcrição (status já aparece no header).
 - Implementado **chunking de áudio** em `transcribe_gemma4.py`: áudios longos são divididos em chunks de 30s e transcritos chunk a chunk, corrigindo o problema de transcrição incompleta.
+- Progresso da transcrição agora mostra a **mensagem real** do backend (ex: "Transcrevendo chunk 1/171...") em vez de mensagens genéricas fixas.
 
 ## Próximos passos pendentes (opcional)
 

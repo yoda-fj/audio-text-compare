@@ -16,6 +16,7 @@ function App() {
   const [comparison, setComparison] = useState<ComparisonResult | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [progressMessage, setProgressMessage] = useState('')
   const [showHistory, setShowHistory] = useState(false)
   const [pythonStatus, setPythonStatus] = useState<{ ready: boolean; python?: string; message: string } | null>(null)
   const [selectedModel, setSelectedModel] = useState('google/gemma-4-E2B-it')
@@ -111,8 +112,9 @@ function App() {
     setError(null)
     setSuccessMessage(null)
 
-    const unsubscribe = window.electronAPI.onTranscriptionProgress((p) => {
+    const unsubscribe = window.electronAPI.onTranscriptionProgress((p, msg) => {
       setProgress(p)
+      setProgressMessage(msg)
     })
 
     try {
@@ -325,6 +327,7 @@ function App() {
               isHfTokenConfigured={hasHfToken}
               isProcessing={isProcessing}
               progress={progress}
+              progressMessage={progressMessage}
               onSelectAudio={handleSelectAudio}
               onClearAudio={clearAudio}
               onChangeModel={setSelectedModel}

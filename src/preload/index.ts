@@ -13,7 +13,7 @@ export interface IElectronAPI {
   checkPythonStatus: () => Promise<{ ready: boolean; python?: string; message: string }>
   saveSetting: (key: string, value: string) => Promise<void>
   getSetting: (key: string) => Promise<string | null>
-  onTranscriptionProgress: (callback: (progress: number) => void) => () => void
+  onTranscriptionProgress: (callback: (progress: number, message: string) => void) => () => void
   downloadModel: (model: string) => Promise<{ success: boolean; error?: string }>
   onDownloadProgress: (callback: (progress: number, message: string) => void) => () => void
 }
@@ -31,7 +31,7 @@ const api: IElectronAPI = {
   saveSetting: (key, value) => ipcRenderer.invoke('save-setting', key, value),
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   onTranscriptionProgress: (callback) => {
-    const handler = (_: any, progress: number) => callback(progress)
+    const handler = (_: any, progress: number, message: string) => callback(progress, message)
     ipcRenderer.on('transcription-progress', handler)
     return () => ipcRenderer.removeListener('transcription-progress', handler)
   },

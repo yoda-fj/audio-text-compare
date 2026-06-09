@@ -15,6 +15,7 @@ interface AudioStepProps {
   isHfTokenConfigured: boolean
   isProcessing: boolean
   progress: number
+  progressMessage?: string
   onSelectAudio: () => void
   onClearAudio: () => void
   onChangeModel: (model: string) => void
@@ -30,6 +31,7 @@ export default function AudioStep({
   isHfTokenConfigured,
   isProcessing,
   progress,
+  progressMessage,
   onSelectAudio,
   onClearAudio,
   onChangeModel,
@@ -99,16 +101,11 @@ export default function AudioStep({
         <div className="card space-y-3">
           <ProgressBar
             progress={progress}
-            label="Progresso da transcrição"
+            label={progressMessage || 'Progresso da transcrição'}
             showPercentage={true}
           />
           <p className="text-center text-sm text-gray-600 font-medium">
-            {progress < 30 && 'Enviando áudio para transcrição...'}
-            {progress >= 30 &&
-              progress < 70 &&
-              `Transcrevendo áudio com ${selectedModel}...`}
-            {progress >= 70 && progress < 100 && 'Comparando textos...'}
-            {progress === 100 && 'Finalizado!'}
+            {progressMessage || 'Processando...'}
           </p>
         </div>
       )}

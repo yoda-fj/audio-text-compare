@@ -70,8 +70,8 @@ ipcMain.handle('transcribe-audio', async (_, filePath: string, model: string) =>
   try {
     const result = await pythonClient.transcribe(filePath, {
       model,
-      onProgress: (progress, _message) => {
-        mainWindow?.webContents.send('transcription-progress', progress)
+      onProgress: (progress, message) => {
+        mainWindow?.webContents.send('transcription-progress', progress, message)
       },
     })
     return result
