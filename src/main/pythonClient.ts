@@ -3,7 +3,6 @@ import { spawn, spawnSync } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as crypto from 'crypto'
-import { DatabaseManager } from './database'
 
 export interface TranscribeOptions {
   model?: string
@@ -34,7 +33,6 @@ function findExistingVenv(): string | null {
 }
 
 export class PythonClient {
-  private db = new DatabaseManager()
   private _venvDir: string | null = null
 
   private get venvDir(): string {
