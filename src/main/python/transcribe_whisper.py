@@ -3,10 +3,12 @@
 
 import argparse
 import json
+import os
 import sys
 import traceback
 
 try:
+    import torch
     import whisper
 except ImportError:
     print(
@@ -45,8 +47,17 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        # Detecta MPS (Apple Silicon) ou CUDA, senão CPU
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        report_progress(5, f"Dispositivo detectado: {device}")
+
+        model_path = os.path.join(args.model_dir, "large-v3.pt")
         report_progress(10, "Carregando modelo Whisper...")
-        model = whisper.load_model("large-v3", download_root=args.model_dir)
+        model = whisper.load_model(model_path, device=device)
 
         report_progress(30, "Transcrevendo áudio...")
         audio = whisper.load_audio(args.audio)
@@ -58,6 +69,7 @@ def main() -> None:
             language=args.language,
             initial_prompt=initial_prompt,
             verbose=False,
+            fp16=False,  # necessário para MPS/CPU
         )
 
         report_progress(80, "Finalizando...")

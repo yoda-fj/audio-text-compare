@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import sys
 import traceback
 
@@ -40,7 +41,12 @@ def main() -> None:
     try:
         report_progress(10, "Baixando modelo Whisper large-v3...")
         whisper.load_model("large-v3", download_root=args.model_dir)
-        report_progress(50, "Extraindo modelo...")
+
+        # Verifica se o arquivo foi salvo no local esperado
+        model_path = os.path.join(args.model_dir, "large-v3.pt")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Modelo não encontrado em {model_path}")
+
         report_progress(100, "Modelo pronto")
     except Exception as exc:
         report_error(f"Erro ao baixar modelo Whisper: {exc}")
