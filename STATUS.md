@@ -86,6 +86,7 @@ pillow
 - Implementado **checkpoint/retomada** de transcrição: cada chunk processado é salvo em `~/Library/Application Support/audio-text-compare/transcription_checkpoints/`. Se o processo for interrompido (máquina dorme, crash, etc.), clicar em "Transcrever" novamente retoma de onde parou.
 - UI exibe aviso amarelo com contador de chunks quando existe checkpoint disponível, com botões "Retomar transcrição" e "Descartar e recomeçar".
 - Texto do documento original (primeiro step) é enviado como **contexto** para o modelo Gemma 4 durante a transcrição, melhorando o reconhecimento de termos específicos e vocabulário do documento.
+- **Modo economia de memória** automático: em máquinas com menos de 20 GB RAM, o script Python força mais offload de camadas do modelo para o disco (`max_memory`, `offload_state_dict`), evitando OOM (erro "code null").
 
 ## Próximos passos pendentes (opcional)
 

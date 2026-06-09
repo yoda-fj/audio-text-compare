@@ -7,3 +7,4 @@ soundfile
 numpy
 pillow
 huggingface_hub
+psutil

@@ -45,6 +45,7 @@ def main() -> None:
     parser.add_argument("--chunk-duration", type=int, default=30, help="Duração de cada chunk de áudio em segundos")
     parser.add_argument("--checkpoint-file", default="", help="Caminho do arquivo de checkpoint JSON")
     parser.add_argument("--context", default="", help="Texto do documento original para contextualizar a transcrição")
+    parser.add_argument("--low-memory", action="store_true", help="Força mais offload para disco (mais lento, usa menos RAM)")
     parser.add_argument("--hf-token", default="", help="Hugging Face token (ou use env HF_TOKEN)")
     parser.add_argument("--hf-token-stdin", action="store_true", help="Ler HF Token do stdin")
     args = parser.parse_args()
@@ -96,7 +97,23 @@ def main() -> None:
         device = "cpu"
         dtype = torch.float32
 
-    if not checkpoint:
+    # Detectar RAM total para decidir offload agressivo
+    total_ram_gb = 16
+    try:
+        import psutil
+        total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+    except Exception:
+        try:
+            import subprocess
+            total_ram_bytes = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]).strip())
+            total_ram_gb = total_ram_bytes / (1024 ** 3)
+        except Exception:
+            pass
+
+    low_memory = args.low_memory or total_ram_gb < 20
+    if low_memory:
+        log_progress(10, f"Modo economia de memória ativado ({total_ram_gb:.0f} GB RAM detectada). Carregando modelo com offload para disco...")
+    elif not checkpoint:
         log_progress(10, "Loading model...")
     else:
         log_progress(10, "Loading model (retomando)...")
@@ -107,7 +124,7 @@ def main() -> None:
 
     try:
         processor = Gemma4Processor.from_pretrained(args.model, token=hf_token)
-        if not checkpoint:
+        if not checkpoint and not low_memory:
             log_progress(30, "Processor loaded. Loading model weights...")
 
         load_kwargs: dict = {
@@ -116,8 +133,15 @@ def main() -> None:
             "low_cpu_mem_usage": True,
         }
         if device != "cpu":
-            load_kwargs["device_map"] = "auto"
-            load_kwargs["offload_folder"] = offload_dir
+            if low_memory:
+                # Força mais camadas para o disco quando há pouca RAM
+                load_kwargs["device_map"] = "auto"
+                load_kwargs["offload_folder"] = offload_dir
+                load_kwargs["offload_state_dict"] = True
+                load_kwargs["max_memory"] = {0: "4GiB", "cpu": "6GiB"}
+            else:
+                load_kwargs["device_map"] = "auto"
+                load_kwargs["offload_folder"] = offload_dir
         model = Gemma4ForConditionalGeneration.from_pretrained(args.model, **load_kwargs)
         if device == "cpu":
             model = model.to(device)
