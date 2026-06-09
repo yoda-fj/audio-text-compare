@@ -223,11 +223,6 @@ export class PythonClient {
     audioPath: string,
     options: TranscribeOptions & { onProgress?: (progress: number, message: string) => void }
   ): Promise<TranscribeResult> {
-    const hfToken = this.db.getDecryptedSetting('hf_token')
-    if (!hfToken) {
-      throw new Error('Hugging Face Token não configurado. Configure em Configurações.')
-    }
-
     const venvPython = await this.ensureVenvReady()
     const scriptPath = this.resolvePythonScript('transcribe_gemma4.py')
     const checkpointPath = this.getCheckpointPath(audioPath, options.model ?? '')
@@ -238,7 +233,6 @@ export class PythonClient {
       scriptPath,
       '--audio', audioPath,
       '--max-tokens', String(options.maxTokens ?? 512),
-      '--hf-token-stdin',
       '--checkpoint-file', checkpointPath,
       '--cache-dir', cacheDir,
     ]
@@ -254,13 +248,8 @@ export class PythonClient {
       const proc = spawn(
         venvPython,
         args,
-        { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
+        { env: { ...process.env, PYTHONUNBUFFERED: '1' } }
       )
-
-      if (proc.stdin) {
-        proc.stdin.write(hfToken)
-        proc.stdin.end()
-      }
 
       let stdoutData = ''
       let stderrBuffer = ''

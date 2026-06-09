@@ -46,27 +46,11 @@ def main() -> None:
     parser.add_argument("--checkpoint-file", default="", help="Caminho do arquivo de checkpoint JSON")
     parser.add_argument("--context", default="", help="Texto do documento original para contextualizar a transcrição")
     parser.add_argument("--low-memory", action="store_true", help="Força mais offload para disco (mais lento, usa menos RAM)")
-    parser.add_argument("--hf-token", default="", help="Hugging Face token (ou use env HF_TOKEN)")
-    parser.add_argument("--hf-token-stdin", action="store_true", help="Ler HF Token do stdin")
     parser.add_argument("--cache-dir", default="", help="Diretório de cache do Hugging Face (para modelos embutidos no pacote)")
     args = parser.parse_args()
 
     if not os.path.exists(args.audio):
         log_error(f"Arquivo de áudio não encontrado: {args.audio}")
-        sys.exit(1)
-
-    hf_token = None
-    if args.hf_token_stdin:
-        try:
-            hf_token = sys.stdin.read().strip()
-        except Exception as e:
-            log_error(f"Falha ao ler HF token do stdin: {e}")
-            sys.exit(1)
-    else:
-        hf_token = args.hf_token or os.environ.get("HF_TOKEN", None)
-
-    if not hf_token:
-        log_error("Hugging Face Token é obrigatório. Configure o token no aplicativo.")
         sys.exit(1)
 
     # Load checkpoint if available
@@ -124,15 +108,16 @@ def main() -> None:
     os.makedirs(offload_dir, exist_ok=True)
 
     try:
-        processor_kwargs: dict = {"token": hf_token}
+        processor_kwargs: dict = {}
         model_kwargs: dict = {
             "torch_dtype": dtype,
-            "token": hf_token,
             "low_cpu_mem_usage": True,
         }
         if args.cache_dir:
             processor_kwargs["cache_dir"] = args.cache_dir
             model_kwargs["cache_dir"] = args.cache_dir
+            processor_kwargs["local_files_only"] = True
+            model_kwargs["local_files_only"] = True
 
         processor = Gemma4Processor.from_pretrained(args.model, **processor_kwargs)
         if not checkpoint and not low_memory:
