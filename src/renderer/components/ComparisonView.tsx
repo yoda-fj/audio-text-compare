@@ -463,86 +463,100 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
               </h4>
             </div>
           </div>
-          {/* Layout em grid 2-colunas: CADA LINHA = um "segmento" do diff.
-              Segmento = grupo de equals consecutivos (mantém o texto denso)
-              OU um único removed/added/changed (cria uma quebra de linha
-              só onde há mudança). Garante alinhamento palavra-a-palavra
-              sem inflar o scroll. */}
+          {/* Layout em grid 2-colunas: cada LINHA começa sempre num `equal`
+              — ou seja, a primeira palavra da linha é a MESMA nas duas
+              colunas. Palavras omitidas/adicionadas/alteradas NUNCA causam
+              quebra: fluem inline dentro da linha corrente (cada uma na sua
+              coluna). A quebra só acontece num ponto de sincronização
+              (`equal`) e somente depois que a linha atingiu um tamanho
+              alvo — assim o texto fica denso, sem uma linha por diferença. */}
           <div className="grid grid-cols-2 gap-x-4 text-sm leading-relaxed">
-            {groupDiffForSideBySide(diff).flatMap((seg, segIdx) => {
-              // Renderiza a célula esquerda
-              const leftCell = (() => {
-                if (!seg.left) {
-                  return <span className="text-gray-300 select-none">·</span>
-                }
-                if (seg.left.type === 'equal') {
-                  return (
-                    <span className="diff-equal">
-                      {seg.left.items.map((it) => it.value).join(' ')}
-                    </span>
-                  )
-                }
-                if (seg.left.type === 'removed') {
-                  const it = seg.left.items[0]
-                  const origIdx = diff.indexOf(it)
-                  return (
-                    <WordWithPlay
-                      idx={origIdx}
-                      item={it}
-                      className="diff-removed"
-                      tooltip="Omitido no áudio"
-                    />
-                  )
-                }
-                if (seg.left.type === 'changed') {
-                  const it = seg.left.items[0]
-                  return <span className="diff-removed">{it.original}</span>
-                }
-                return null
-              })()
-              // Renderiza a célula direita
-              const rightCell = (() => {
-                if (!seg.right) {
-                  return <span className="text-gray-300 select-none">·</span>
-                }
-                if (seg.right.type === 'equal') {
-                  return (
-                    <span className="diff-equal">
-                      {seg.right.items.map((it) => it.value).join(' ')}
-                    </span>
-                  )
-                }
-                if (seg.right.type === 'added') {
-                  const it = seg.right.items[0]
-                  const origIdx = diff.indexOf(it)
-                  return (
-                    <WordWithPlay
-                      idx={origIdx}
-                      item={it}
-                      className="diff-added"
-                      tooltip="Adicionado no áudio"
-                    />
-                  )
-                }
-                if (seg.right.type === 'changed') {
-                  const it = seg.right.items[0]
-                  const origIdx = diff.indexOf(it)
-                  return (
-                    <WordWithPlay
-                      idx={origIdx}
-                      item={it}
-                      className="diff-changed"
-                      tooltip={`Original: "${it.original}"`}
-                    />
-                  )
-                }
-                return null
-              })()
-              // Cada segmento = 1 linha no grid (2 cells: esquerda, direita)
-              // py-0.5 dá respiro vertical entre linhas.
+            {groupDiffIntoRows(diff).flatMap((row, rowIdx) => {
+              // Coluna esquerda (documento): equal + removed + changed.original
+              const leftContent = row
+                .map(({ item, idx }) => {
+                  if (item.type === 'equal') {
+                    return (
+                      <span key={idx} className="diff-equal">
+                        {item.value}{' '}
+                      </span>
+                    )
+                  }
+                  if (item.type === 'removed') {
+                    return (
+                      <WordWithPlay
+                        key={idx}
+                        idx={idx}
+                        item={item}
+                        className="diff-removed"
+                        tooltip="Omitido no áudio"
+                      />
+                    )
+                  }
+                  if (item.type === 'changed') {
+                    return (
+                      <span key={idx} className="diff-removed">
+                        {item.original}{' '}
+                      </span>
+                    )
+                  }
+                  return null // `added` não aparece na coluna do documento
+                })
+                .filter(Boolean)
+
+              // Coluna direita (áudio): equal + added + changed.value
+              const rightContent = row
+                .map(({ item, idx }) => {
+                  if (item.type === 'equal') {
+                    return (
+                      <span key={idx} className="diff-equal">
+                        {item.value}{' '}
+                      </span>
+                    )
+                  }
+                  if (item.type === 'added') {
+                    return (
+                      <WordWithPlay
+                        key={idx}
+                        idx={idx}
+                        item={item}
+                        className="diff-added"
+                        tooltip="Adicionado no áudio"
+                      />
+                    )
+                  }
+                  if (item.type === 'changed') {
+                    return (
+                      <WordWithPlay
+                        key={idx}
+                        idx={idx}
+                        item={item}
+                        className="diff-changed"
+                        tooltip={`Original: "${item.original}"`}
+                      />
+                    )
+                  }
+                  return null // `removed` não aparece na coluna do áudio
+                })
+                .filter(Boolean)
+
+              // py-0.5 dá respiro vertical entre linhas. As células são
+              // blocos normais para o texto poder quebrar internamente.
               return [
-                <div key={`sl-${segIdx}`} className="py-0.5 flex items-baseline">{leftCell}</div>,
-                <div key={`sr-${segIdx}`} className="py-0.5 flex items-baseline">{rightCell}</div>,
+                <div key={`sl-${rowIdx}`} className="py-0.5">
+                  {leftContent.length > 0 ? (
+                    leftContent
+                  ) : (
+                    <span className="text-gray-300 select-none">·</span>
+                  )}
+                </div>,
+                <div key={`sr-${rowIdx}`} className="py-0.5">
+                  {rightContent.length > 0 ? (
+                    rightContent
+                  ) : (
+                    <span className="text-gray-300 select-none">·</span>
+                  )}
+                </div>,
               ]
             })}
           </div>
@@ -657,69 +671,51 @@ function formatTime(seconds: number): string {
 }
 
 /**
- * Agrupa items consecutivos do diff em "segmentos" para o layout
- * side-by-side. Consecutivos do tipo `equal` viram um único segmento
- * (mantém o texto denso); `removed`/`added`/`changed` viram segmentos
- * próprios (cada um ocupa uma linha no grid).
+ * Agrupa o diff em "linhas" para o layout side-by-side.
  *
- * Cada segmento vira uma linha de um grid 2-colunas:
- *   - `equal`: ambas as células têm o mesmo texto
- *   - `removed`: célula esquerda com texto, célula direita vazia
- *   - `added`: célula esquerda vazia, célula direita com texto
- *   - `changed`: célula esquerda com `original`, célula direita com `transcribed`
+ * Regras:
+ *   - Uma linha só pode COMEÇAR num item `equal` (ponto de sincronização),
+ *     garantindo que a primeira palavra da linha é a MESMA nas duas colunas.
+ *   - Diferenças (removed/added/changed) NUNCA causam quebra: fluem inline
+ *     dentro da linha corrente, cada uma na sua coluna.
+ *   - A quebra acontece no primeiro `equal` encontrado DEPOIS que a linha
+ *     atingiu `TARGET_WORDS_PER_ROW` itens — assim as linhas têm tamanho
+ *     aproximadamente uniforme e o texto fica denso, em vez de gerar uma
+ *     linha nova a cada diferença isolada.
+ *   - Se uma sequência de diferenças atravessa o tamanho alvo, a linha
+ *     simplesmente cresce até o próximo `equal` (nunca quebra no meio de
+ *     uma diferença).
  *
- * Isso garante que palavras equivalentes fiquem NA MESMA linha visual,
- * sem precisar de uma linha por palavra (não infla o scroll).
+ * Cada entrada carrega o índice original no `diff`, para o WordWithPlay
+ * achar o timing certo sem precisar de `diff.indexOf` (O(n²)).
  */
-type SideBySideSegment = {
-  left: { items: DiffItem[]; type: 'equal' | 'removed' | 'changed' } | null
-  right: { items: DiffItem[]; type: 'equal' | 'added' | 'changed' } | null
-}
+type SideBySideRow = Array<{ item: DiffItem; idx: number }>
 
-function groupDiffForSideBySide(diff: DiffItem[]): SideBySideSegment[] {
-  const segments: SideBySideSegment[] = []
-  let i = 0
-  while (i < diff.length) {
-    const item = diff[i]
-    if (item.type === 'equal') {
-      // Agrupa todos os equals consecutivos
-      const equalItems: DiffItem[] = []
-      while (i < diff.length && diff[i].type === 'equal') {
-        equalItems.push(diff[i])
-        i++
-      }
-      segments.push({
-        left: { items: equalItems, type: 'equal' },
-        right: { items: equalItems, type: 'equal' },
-      })
-    } else if (item.type === 'removed') {
-      // removed: linha com texto só na esquerda
-      const removedItems: DiffItem[] = [item]
-      i++
-      segments.push({
-        left: { items: removedItems, type: 'removed' },
-        right: null,
-      })
-    } else if (item.type === 'added') {
-      // added: linha com texto só na direita
-      const addedItems: DiffItem[] = [item]
-      i++
-      segments.push({
-        left: null,
-        right: { items: addedItems, type: 'added' },
-      })
-    } else if (item.type === 'changed') {
-      // changed: linha com texto diferente em cada lado
-      segments.push({
-        left: { items: [item], type: 'changed' },
-        right: { items: [item], type: 'changed' },
-      })
-      i++
-    } else {
-      i++ // fallback
+/** Tamanho alvo (em itens do diff) de cada linha do side-by-side. */
+const TARGET_WORDS_PER_ROW = 12
+
+function groupDiffIntoRows(diff: DiffItem[]): SideBySideRow[] {
+  const rows: SideBySideRow[] = []
+  let current: SideBySideRow = []
+
+  diff.forEach((item, idx) => {
+    // Quebra apenas num ponto de sincronização (`equal`) e somente quando
+    // a linha atual já atingiu o tamanho alvo. O `equal` vira a PRIMEIRA
+    // palavra da próxima linha — idêntica nas duas colunas.
+    if (
+      item.type === 'equal' &&
+      current.length >= TARGET_WORDS_PER_ROW
+    ) {
+      rows.push(current)
+      current = []
     }
+    current.push({ item, idx })
+  })
+
+  if (current.length > 0) {
+    rows.push(current)
   }
-  return segments
+  return rows
 }
 
 export default ComparisonView
