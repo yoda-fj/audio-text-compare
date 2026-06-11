@@ -47,6 +47,42 @@ SEGMENT_RE = re.compile(
 )
 
 
+# Caracteres latinos imprimíveis + acentos BR + pontuação + espaço. Usado
+# para sanitizar o `initial_prompt` antes de enviar ao Whisper — o
+# openai-whisper é conhecido por alucinar caracteres não-latinos (chinês,
+# árabe, etc.) quando o prompt contém esse tipo de texto, especialmente
+# no final do documento (citações, rodapés, referências).
+_LATIN_PROMPT_CHARS_RE = re.compile(
+    r"[A-Za-zÀ-ÖØ-öø-ÿ0-9\.\,\;\:\?\!\(\)\[\]\{\}\-\—\'\"\´\`\…\s]"
+)
+
+
+def sanitize_initial_prompt(text: str, max_chars: int = MAX_CONTEXT_CHARS) -> str | None:
+    """Filtra `text` mantendo apenas caracteres latinos imprimíveis e
+    pontuação comum, colapsa whitespace repetido e retorna o **fim** do
+    texto (o Whisper só usa os últimos ~224 tokens). Retorna `None` se
+    não sobrar nada útil após a limpeza.
+
+    O motivo deste filtro: o Whisper usa `initial_prompt` como viés de
+    vocabulário. Se o final do documento contém citações, rodapés ou
+    tabelas com caracteres CJK/árabe/cyrillic, o modelo "aprende" a
+    gerar esses caracteres no meio da transcrição, mesmo em áudios
+    puramente em português. Sintoma típico: tokens como 瞳孫瞳, 其其其
+    ou 人們認識 aparecem no meio de fala clara em pt-BR.
+    """
+    if not text:
+        return None
+    # Mantém só caracteres "seguros" para o Whisper como prompt
+    cleaned = "".join(ch if _LATIN_PROMPT_CHARS_RE.match(ch) else " " for ch in text)
+    # Colapsa whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return None
+    # Pega o final (Whisper usa só os últimos ~224 tokens)
+    tail = cleaned[-max_chars:].strip()
+    return tail or None
+
+
 def report_progress(progress: int, message: str) -> None:
     payload = {"type": "progress", "progress": progress, "message": message}
     print(json.dumps(payload, ensure_ascii=False), file=sys.stderr, flush=True)
@@ -79,9 +115,14 @@ class SegmentCapture:
     """File-like que intercepta o stdout do Whisper (verbose=True) e converte
     cada segmento impresso em um evento de progresso JSON no stderr."""
 
-    def __init__(self, total_duration: float):
-        # Evita divisão por zero em áudios vazios/corrompidos
+    def __init__(self, total_duration: float, progress_denominator: float | None = None):
+        # Evita divisão por zero em áudios vazios/corrompidos. Quando
+        # rodando em pré-teste, o denominador do progresso é o `clip_end`
+        # (não a duração total) — caso contrário a barra trava em
+        # `clip_end / total_duration`% e nunca chega a 100.
+        denom = progress_denominator if progress_denominator and progress_denominator > 0 else total_duration
         self.total_duration = max(total_duration, 0.001)
+        self.progress_denominator = max(denom, 0.001)
         self._buffer = ""
 
     # --- interface file-like mínima ---------------------------------------
@@ -124,7 +165,7 @@ class SegmentCapture:
             span = PROGRESS_TRANSCRIBE_END - PROGRESS_TRANSCRIBE_START
             progress = min(
                 PROGRESS_TRANSCRIBE_END,
-                int(PROGRESS_TRANSCRIBE_START + (end_sec / self.total_duration) * span),
+                int(PROGRESS_TRANSCRIBE_START + (end_sec / self.progress_denominator) * span),
             )
             report_progress(progress, f"[{start_str} --> {end_str}] {text_seg}")
 
@@ -177,7 +218,19 @@ def main() -> None:
         action="store_true",
         help="Desativa condition_on_previous_text (reduz loops de alucinação em áudios longos)",
     )
+    parser.add_argument(
+        "--clip-end-s",
+        type=float,
+        default=None,
+        help=(
+            "Se fornecido, transcreve apenas o intervalo [0, clip_end_s] do áudio. "
+            "Usado pelo modo pré-teste (Whisper). O valor é clampado em total_duration. "
+            "Marca o resultado final com `\"pretest\": true`."
+        ),
+    )
     args = parser.parse_args()
+
+    is_pretest = args.clip_end_s is not None
 
     try:
         # --- validações antecipadas, com mensagens claras ------------------
@@ -204,16 +257,50 @@ def main() -> None:
         if total_duration < 0.1:
             report_error("Áudio vazio ou corrompido (duração ~0s)")
             sys.exit(1)
-        report_progress(
-            PROGRESS_AUDIO_INFO, f"Áudio: {total_duration / 60:.1f} minutos"
-        )
 
-        # Whisper só aproveita o final do prompt; truncamos pelo fim
-        initial_prompt = None
-        if args.context:
-            initial_prompt = args.context[-MAX_CONTEXT_CHARS:]
+        # Resolve o `clip_end` final (clamp em total_duration). None significa
+        # "transcrição completa, sem pré-teste".
+        clip_end: float | None = None
+        if is_pretest:
+            clip_end = min(args.clip_end_s, total_duration)
+            # Sanidade: se o usuário pediu 0 ou negativo, tratamos como completo.
+            if clip_end <= 0:
+                clip_end = None
+                is_pretest = False
 
-        capture = SegmentCapture(total_duration)
+        if is_pretest and clip_end is not None:
+            report_progress(
+                PROGRESS_AUDIO_INFO,
+                f"Áudio: {total_duration / 60:.1f} min (pré-teste: primeiros {clip_end:.0f}s)",
+            )
+        else:
+            report_progress(
+                PROGRESS_AUDIO_INFO, f"Áudio: {total_duration / 60:.1f} minutos"
+            )
+
+        # Whisper só aproveita o final do prompt. Sanitizamos o texto
+        # para evitar alucinações com caracteres não-latinos vindos do
+        # final do documento (citações, rodapés, referências). O filtro
+        # mantém só letras latinas + acentos BR + pontuação comum; sem
+        # isso, o openai-whisper pode inserir tokens em CJK/árabe no
+        # meio da transcrição de áudios em pt-BR.
+        initial_prompt = sanitize_initial_prompt(args.context)
+
+        # `clip_timestamps="0,X"` (em segundos) é o parâmetro nativo do
+        # openai-whisper que limita a transcrição a uma janela. Quando não
+        # há pré-teste, mantemos `clip_timestamps="0"` (comportamento
+        # histórico).
+        if is_pretest and clip_end is not None:
+            clip_timestamps = f"0,{clip_end:.3f}"
+        else:
+            clip_timestamps = "0"
+
+        # O denominador do progresso: usa `clip_end` no pré-teste para que a
+        # barra chegue a 100% ao final da janela (não trava em
+        # clip_end/total_duration%).
+        progress_denom = clip_end if (is_pretest and clip_end is not None) else total_duration
+
+        capture = SegmentCapture(total_duration, progress_denominator=progress_denom)
         with contextlib.redirect_stdout(capture):
             try:
                 result = model.transcribe(
@@ -223,6 +310,7 @@ def main() -> None:
                     verbose=True,  # ativa saída segmento a segmento
                     fp16=fp16,
                     condition_on_previous_text=not args.no_condition_on_previous,
+                    clip_timestamps=clip_timestamps,
                 )
             finally:
                 capture.flush()
@@ -253,6 +341,7 @@ def main() -> None:
                     "language": result.get("language", args.language),
                     "duration": round(total_duration, 2),
                     "segments": segments,
+                    "pretest": is_pretest,
                 },
                 ensure_ascii=False,
             )

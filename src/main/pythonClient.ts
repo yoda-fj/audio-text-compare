@@ -2,7 +2,8 @@ import { app } from 'electron'
 import { spawn, spawnSync } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
-import * as crypto from 'crypto'
+import type { ChildProcess } from 'child_process'
+import type { PythonEvent } from '../renderer/types'
 
 export interface TranscribeOptions {
   model?: string
@@ -12,6 +13,25 @@ export interface TranscribeOptions {
 
 export interface TranscribeResult {
   text: string
+}
+
+/** Resultado bruto do spawn de um script Python. */
+interface SpawnResult {
+  exitCode: number
+  /** Última linha JSON do stdout (se for `result`). */
+  resultText: string | null
+  /** stdout bruto acumulado. Necessário para o caller extrair campos além
+   *  de `text` (ex.: `segments` do Whisper, com timestamps palavra-a-palavra). */
+  stdoutData: string
+  /** stderr bruto acumulado (para mensagens de erro). */
+  stderrRaw: string
+}
+
+/** Opções de spawn unificado. O caller (main/index.ts) faz a orquestração DB↔eventos. */
+export interface SpawnScriptOptions {
+  scriptName: string
+  args: string[]
+  onEvent: (event: PythonEvent) => void
 }
 
 function findExistingVenv(): string | null {
@@ -32,12 +52,12 @@ function findExistingVenv(): string | null {
   return null
 }
 
-import type { ChildProcess } from 'child_process'
-
 export class PythonClient {
   private _venvDir: string | null = null
   private _isTranscribing = false
   private _transcriptionProc: ChildProcess | null = null
+  private _killTimer: NodeJS.Timeout | null = null
+  private _cancelRequested = false
 
   private get venvDir(): string {
     if (!this._venvDir) {
@@ -187,262 +207,339 @@ export class PythonClient {
     })
   }
 
-  private getCheckpointPath(audioPath: string, model: string): string {
+  /**
+   * Resolve o caminho do checkpoint JSON para uma comparação. Path
+   * namespaceado por `comparison_id` para que comparações distintas
+   * nunca compartilhem arquivo.
+   */
+  getCheckpointPath(comparisonId: number): string {
     const checkpointsDir = path.join(app.getPath('userData'), 'transcription_checkpoints')
     fs.mkdirSync(checkpointsDir, { recursive: true })
-    const hash = crypto.createHash('sha256').update(`${audioPath}:${model}`).digest('hex').slice(0, 16)
-    const audioName = path.basename(audioPath, path.extname(audioPath))
-    return path.join(checkpointsDir, `${audioName}_${hash}.json`)
+    return path.join(checkpointsDir, `${comparisonId}.json`)
   }
 
-  getCheckpointStatus(audioPath: string, model: string): { exists: boolean; completedChunks?: number; totalChunks?: number } {
-    const checkpointPath = this.getCheckpointPath(audioPath, model)
-    if (!fs.existsSync(checkpointPath)) {
-      return { exists: false }
-    }
+  /**
+   * Apaga o checkpoint de uma comparação. Chamado em `completed`, `error`,
+   * `cancelled` e ao deletar a comparação.
+   */
+  deleteCheckpoint(comparisonId: number): void {
+    const p = this.getCheckpointPath(comparisonId)
     try {
-      const data = JSON.parse(fs.readFileSync(checkpointPath, 'utf-8'))
-      const completed = data.results?.length ?? 0
-      const total = data.total_chunks ?? 0
-      return { exists: completed > 0, completedChunks: completed, totalChunks: total }
-    } catch {
-      return { exists: false }
-    }
-  }
-
-  deleteCheckpoint(audioPath: string, model: string): void {
-    const checkpointPath = this.getCheckpointPath(audioPath, model)
-    try {
-      if (fs.existsSync(checkpointPath)) {
-        fs.unlinkSync(checkpointPath)
+      if (fs.existsSync(p)) {
+        fs.unlinkSync(p)
       }
     } catch {
       // ignore
     }
   }
 
-  async transcribe(
+  /**
+   * Escreve o checkpoint a partir dos chunks `done` do DB. É a única
+   * direção de escrita canônica: o Node é a fonte de verdade (DB), o
+   * arquivo JSON é um derivado.
+   *
+   * O schema do checkpoint aqui é o que o `transcribe_gemma4.py` espera:
+   * `{ audio, model, total_chunks, results: [<text por chunk>] }`.
+   */
+  writeCheckpointFromDoneChunks(
+    comparisonId: number,
     audioPath: string,
-    options: TranscribeOptions & { onProgress?: (progress: number, message: string) => void }
-  ): Promise<TranscribeResult> {
-    if (this._isTranscribing) {
-      return Promise.reject(new Error('Uma transcrição já está em andamento. Aguarde ou cancele a anterior.'))
+    model: string,
+    doneChunks: Array<{ chunk_index: number; text: string | null }>,
+    totalChunks: number
+  ): void {
+    const ordered = [...doneChunks].sort((a, b) => a.chunk_index - b.chunk_index)
+    const results = ordered.map((c) => c.text ?? '')
+    const payload = {
+      audio: audioPath,
+      model,
+      total_chunks: totalChunks,
+      results,
     }
-    this._isTranscribing = true
+    const p = this.getCheckpointPath(comparisonId)
+    try {
+      fs.writeFileSync(p, JSON.stringify(payload, null, 2), 'utf-8')
+    } catch (e) {
+      // Não derruba a transcrição se o checkpoint não for gravável —
+      // o Python vai simplesmente reprocessar tudo.
+      // eslint-disable-next-line no-console
+      console.warn(`Falha ao escrever checkpoint ${p}:`, e)
+    }
+  }
 
+  /**
+   * Spawna um script Python com buffer de linha no stderr e parsing
+   * tolerante. Cada linha JSON vira um `PythonEvent` enviado para
+   * `onEvent`. Resolve com `{ exitCode, resultText, stderrRaw }` quando
+   * o processo termina.
+   *
+   * Implementa o requisito de **buffer de linha obrigatório** do plano:
+   * eventos podem chegar fracionados em múltiplos `data` chunks, e
+   * parsear `data` cru quebraria o JSON.
+   */
+  private async spawnScript(opts: SpawnScriptOptions): Promise<SpawnResult> {
     const venvPython = await this.ensureVenvReady()
-    const scriptPath = this.resolvePythonScript('transcribe_gemma4.py')
-    const checkpointPath = this.getCheckpointPath(audioPath, options.model ?? '')
 
-    const cacheDir = this.getHuggingFaceCacheDir()
-
-    const args: string[] = [
-      scriptPath,
-      '--audio', audioPath,
-      '--max-tokens', String(options.maxTokens ?? 512),
-      '--checkpoint-file', checkpointPath,
-      '--cache-dir', cacheDir,
-    ]
-
-    if (options.model) {
-      args.push('--model', options.model)
-    }
-    if (options.context && options.context.trim()) {
-      args.push('--context', options.context.trim().slice(0, 2000))
-    }
-
-    return new Promise((resolve, reject) => {
-      const proc = spawn(
-        venvPython,
-        args,
-        { env: { ...process.env, PYTHONUNBUFFERED: '1' } }
-      )
+    return new Promise((resolve) => {
+      const proc = spawn(venvPython, [opts.scriptName, ...opts.args], {
+        env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      })
       this._transcriptionProc = proc
+      this._cancelRequested = false
 
       let stdoutData = ''
       let stderrBuffer = ''
+      let stderrRaw = ''
 
       proc.stdout.on('data', (chunk: Buffer) => {
         stdoutData += chunk.toString('utf-8')
       })
 
+      // Buffer de linha: acumula `data` events e fatia por `\n`.
+      // Sem isso, um `chunk_done` com texto longo pode chegar em dois
+      // `data` chunks e o JSON.parse quebra no meio.
       proc.stderr.on('data', (chunk: Buffer) => {
-        stderrBuffer += chunk.toString('utf-8')
+        const text = chunk.toString('utf-8')
+        stderrRaw += text
+        stderrBuffer += text
         const lines = stderrBuffer.split(/\r?\n/)
         stderrBuffer = lines.pop() ?? ''
         for (const line of lines) {
           const trimmed = line.trim()
           if (!trimmed) continue
-          try {
-            const parsed = JSON.parse(trimmed)
-            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
-              options.onProgress(parsed.progress, parsed.message || '')
-            }
-          } catch {
-            // Ignore non-JSON lines
-          }
+          this.handleScriptLine(trimmed, opts.onEvent)
         }
       })
 
       proc.on('close', (code) => {
         this._isTranscribing = false
         this._transcriptionProc = null
-        // Flush remaining stderr buffer
-        if (stderrBuffer.trim()) {
-          try {
-            const parsed = JSON.parse(stderrBuffer.trim())
-            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
-              options.onProgress(parsed.progress, parsed.message || '')
-            }
-          } catch {
-            // ignore
-          }
+        if (this._killTimer) {
+          clearTimeout(this._killTimer)
+          this._killTimer = null
         }
 
+        // Flush do buffer de linha residual.
+        if (stderrBuffer.trim()) {
+          this.handleScriptLine(stderrBuffer.trim(), opts.onEvent)
+          stderrBuffer = ''
+        }
+
+        // Tenta extrair a linha de resultado do stdout.
+        let resultText: string | null = null
         const lastStdoutLine = stdoutData.trim().split(/\r?\n/).pop()
         if (code === 0 && lastStdoutLine) {
           try {
             const result = JSON.parse(lastStdoutLine)
             if (result.type === 'result' && typeof result.text === 'string') {
-              // Delete checkpoint on success
-              try { fs.unlinkSync(checkpointPath) } catch { /* ignore */ }
-              resolve({ text: result.text })
-              return
+              resultText = result.text
             }
           } catch {
-            // fall through
+            // não era JSON — ignorar
           }
         }
 
-        const lastStderrLine = stderrBuffer.trim().split(/\r?\n/).pop() || ''
-        let errorMessage = `Transcription failed with code ${code}`
-        if (lastStderrLine) {
-          try {
-            const err = JSON.parse(lastStderrLine)
-            if (err.message) errorMessage = err.message
-          } catch {
-            errorMessage = stderrBuffer.trim() || stdoutData.trim() || errorMessage
-          }
-        }
-        reject(new Error(errorMessage))
+        resolve({
+          exitCode: code ?? -1,
+          resultText,
+          stdoutData,
+          stderrRaw,
+        })
       })
 
       proc.on('error', (err) => {
         this._isTranscribing = false
         this._transcriptionProc = null
-        reject(new Error(`Failed to spawn transcription script: ${err.message}`))
+        if (this._killTimer) {
+          clearTimeout(this._killTimer)
+          this._killTimer = null
+        }
+        resolve({
+          exitCode: -1,
+          resultText: null,
+          stdoutData: '',
+          stderrRaw: `spawn error: ${err.message}`,
+        })
       })
     })
   }
 
-  async transcribeWhisper(
-    audioPath: string,
-    options: { context?: string; onProgress?: (progress: number, message: string) => void } = {}
-  ): Promise<TranscribeResult> {
-    if (this._isTranscribing) {
-      return Promise.reject(new Error('Uma transcrição já está em andamento. Aguarde ou cancele a anterior.'))
-    }
-    this._isTranscribing = true
-
-    const venvPython = await this.ensureVenvReady()
-    const scriptPath = this.resolvePythonScript('transcribe_whisper.py')
-    const modelDir = this.getWhisperModelDir()
-
-    const args: string[] = [
-      scriptPath,
-      '--audio', audioPath,
-      '--model-dir', modelDir,
-      '--language', 'pt',
-    ]
-    if (options.context && options.context.trim()) {
-      args.push('--context', options.context.trim().slice(0, 2000))
-    }
-
-    return new Promise((resolve, reject) => {
-      const proc = spawn(
-        venvPython,
-        args,
-        { env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
-      )
-      this._transcriptionProc = proc
-
-      let stdoutData = ''
-      let stderrBuffer = ''
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        stdoutData += chunk.toString('utf-8')
-      })
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        stderrBuffer += chunk.toString('utf-8')
-        const lines = stderrBuffer.split(/\r?\n/)
-        stderrBuffer = lines.pop() ?? ''
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          try {
-            const parsed = JSON.parse(trimmed)
-            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
-              options.onProgress(parsed.progress, parsed.message || '')
-            }
-          } catch { /* ignore */ }
-        }
-      })
-
-      proc.on('close', (code) => {
-        this._isTranscribing = false
-        this._transcriptionProc = null
-        // flush remaining stderr
-        if (stderrBuffer.trim()) {
-          try {
-            const parsed = JSON.parse(stderrBuffer.trim())
-            if (parsed.type === 'progress' && typeof parsed.progress === 'number' && options.onProgress) {
-              options.onProgress(parsed.progress, parsed.message || '')
-            }
-          } catch { /* ignore */ }
-        }
-
-        const lastStdoutLine = stdoutData.trim().split(/\r?\n/).pop()
-        if (code === 0 && lastStdoutLine) {
-          try {
-            const result = JSON.parse(lastStdoutLine)
-            if (result.type === 'result' && typeof result.text === 'string') {
-              resolve({ text: result.text })
-              return
-            }
-          } catch { /* fall through */ }
-        }
-
-        const lastStderrLine = stderrBuffer.trim().split(/\r?\n/).pop() || ''
-        let errorMessage = `Transcription failed with code ${code}`
-        if (lastStderrLine) {
-          try {
-            const err = JSON.parse(lastStderrLine)
-            if (err.message) errorMessage = err.message
-          } catch {
-            errorMessage = stderrBuffer.trim() || stdoutData.trim() || errorMessage
-          }
-        }
-        reject(new Error(errorMessage))
-      })
-
-      proc.on('error', (err) => {
-        this._isTranscribing = false
-        this._transcriptionProc = null
-        reject(new Error(`Failed to spawn: ${err.message}`))
-      })
-    })
-  }
-
-  cancelTranscription(): void {
-    if (this._transcriptionProc) {
-      try {
-        this._transcriptionProc.kill('SIGTERM')
-      } catch {
-        // ignore
+  /**
+   * Tenta parsear uma linha stderr como JSON e emitir como PythonEvent.
+   * Linhas não-JSON são silenciosamente ignoradas (logs normais do Python,
+   * warnings, etc.) — nunca derrubam o cliente.
+   */
+  private handleScriptLine(line: string, onEvent: (e: PythonEvent) => void): void {
+    try {
+      const parsed = JSON.parse(line)
+      if (typeof parsed !== 'object' || parsed === null) return
+      const type = parsed.type
+      if (
+        type === 'progress' ||
+        type === 'chunk_start' ||
+        type === 'chunk_done' ||
+        type === 'chunk_error' ||
+        type === 'error'
+      ) {
+        onEvent(parsed as PythonEvent)
       }
-      this._transcriptionProc = null
+    } catch {
+      // linha não-JSON: log do Python, warning, etc. Ignorar.
     }
-    this._isTranscribing = false
+  }
+
+  /**
+   * Inicia a transcrição de uma comparação (unificado Gemma/Whisper).
+   * O caller (IPC handler) é responsável por orquestrar a persistência
+   * DB ↔ eventos e por reagir ao `resultText` no sucesso.
+   *
+   * `maxChunks` (Gemma ou Whisper): quando > 0, processa só este número
+   * de chunks novos e sai. Usado pelo modo "pré-teste" do UI.
+   *
+   * `chunkDurationS` (Gemma ou Whisper): duração em segundos de cada
+   * chunk. Para Gemma é o tamanho real do chunk (passado via
+   * `--chunk-duration`). Para Whisper é a janela do pré-teste
+   * (multiplicada por `maxChunks` para definir `--clip-end-s`).
+   */
+  async transcribeComparison(opts: {
+    comparisonId: number
+    audioPath: string
+    model: string
+    context?: string
+    checkpointPath: string
+    maxChunks?: number
+    chunkDurationS?: number
+    onEvent: (event: PythonEvent) => void
+  }): Promise<SpawnResult> {
+    if (this._isTranscribing) {
+      throw new Error('Uma transcrição já está em andamento. Aguarde ou cancele a anterior.')
+    }
+    this._isTranscribing = true
+
+    try {
+      const isWhisper = opts.model === 'whisper-large-v3'
+
+      if (isWhisper) {
+        const modelDir = this.getWhisperModelDir()
+        const args: string[] = [
+          '--audio', opts.audioPath,
+          '--model-dir', modelDir,
+          '--language', 'pt',
+        ]
+        if (opts.context && opts.context.trim()) {
+          args.push('--context', opts.context.trim().slice(0, 2000))
+        }
+        if (opts.maxChunks && opts.maxChunks > 0) {
+          // Fallback `?? 30` é obrigatório: sem ele, `chunkDurationS`
+          // undefined faria o pré-teste virar transcrição completa
+          // silenciosamente. O `chunkMath.clampChunkDuration` no IPC
+          // handler garante que o valor já chega clampado aqui, mas o
+          // `?? 30` é a rede de segurança.
+          const dur = opts.chunkDurationS && opts.chunkDurationS > 0 ? opts.chunkDurationS : 30
+          const clipEndS = opts.maxChunks * dur
+          args.push('--clip-end-s', String(clipEndS))
+        }
+        return await this.spawnScript({
+          scriptName: this.resolvePythonScript('transcribe_whisper.py'),
+          args,
+          onEvent: opts.onEvent,
+        })
+      }
+
+      // Gemma
+      const cacheDir = this.getHuggingFaceCacheDir()
+      const args: string[] = [
+        '--audio', opts.audioPath,
+        '--max-tokens', '512',
+        '--checkpoint-file', opts.checkpointPath,
+        '--cache-dir', cacheDir,
+      ]
+      if (opts.model) {
+        args.push('--model', opts.model)
+      }
+      if (opts.context && opts.context.trim()) {
+        args.push('--context', opts.context.trim().slice(0, 2000))
+      }
+      if (opts.chunkDurationS && opts.chunkDurationS > 0) {
+        args.push('--chunk-duration', String(opts.chunkDurationS))
+      }
+      if (opts.maxChunks && opts.maxChunks > 0) {
+        args.push('--max-chunks', String(opts.maxChunks))
+      }
+      return await this.spawnScript({
+        scriptName: this.resolvePythonScript('transcribe_gemma4.py'),
+        args,
+        onEvent: opts.onEvent,
+      })
+    } catch (err) {
+      this._isTranscribing = false
+      this._transcriptionProc = null
+      throw err
+    }
+  }
+
+  /**
+   * Cancela a transcrição atual. Envia SIGTERM ao processo filho; se
+   * não terminar em 5s, envia SIGKILL. A Promise retornada por
+   * `transcribeComparison` resolve com `exitCode` ≠ 0.
+   */
+  cancel(): void {
+    this._cancelRequested = true
+    const proc = this._transcriptionProc
+    if (!proc) return
+
+    try {
+      proc.kill('SIGTERM')
+    } catch {
+      // ignore
+    }
+
+    if (this._killTimer) clearTimeout(this._killTimer)
+    this._killTimer = setTimeout(() => {
+      const p = this._transcriptionProc
+      if (p && !p.killed) {
+        try {
+          p.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+      }
+    }, 5000)
+  }
+
+  /**
+   * Lê a duração de um arquivo de áudio via script Python auxiliar.
+   * Retorna `null` em caso de falha.
+   */
+  async getAudioDuration(audioPath: string): Promise<number | null> {
+    try {
+      const venvPython = await this.ensureVenvReady()
+      const result = spawnSync(
+        venvPython,
+        [this.resolvePythonScript('get_audio_duration.py'), '--audio', audioPath],
+        { encoding: 'utf-8', timeout: 30000 }
+      )
+      if (result.status !== 0) return null
+      const lastLine = result.stdout.trim().split(/\r?\n/).pop() ?? ''
+      try {
+        const parsed = JSON.parse(lastLine)
+        if (typeof parsed.duration === 'number') return parsed.duration
+      } catch {
+        // not JSON
+      }
+    } catch {
+      // venv not ready
+    }
+    return null
+  }
+
+  /** True se uma transcrição está em andamento. */
+  isBusy(): boolean {
+    return this._isTranscribing
+  }
+
+  /** True se `cancel()` foi chamado para a comparação atual. */
+  wasCancelRequested(): boolean {
+    return this._cancelRequested
   }
 }

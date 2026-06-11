@@ -1,6 +1,6 @@
 # Status do Projeto - Audio Text Compare
 
-> Arquivo de handoff para retomada de sessão. Última atualização: 2026-06-09.
+> Arquivo de handoff para retomada de sessão. Última atualização: 2026-06-11.
 
 ## Contexto
 
@@ -103,6 +103,54 @@ openai-whisper
   - Script `npm run prepare-assets` copia modelos do cache do usuário para `assets/models/` antes do build.
   - App não faz mais download de modelos em runtime — tudo vem no instalador.
 
+## 🐛 Correções recentes (2026-06-11)
+
+- **`chunk_duration_s` configurável por projeto** (5–120s, padrão 30s):
+  - Migração v3 do SQLite adiciona coluna `chunk_duration_s INTEGER` (idempotente via `getColumnNames`).
+  - Persistido no DB e exposto via input inline no `AudioStep` (clamp canônico no main process via `clampChunkDuration`).
+  - No Gemma, é o tamanho real de cada chunk (passado como `--chunk-duration`).
+  - No Whisper, é a janela do pré-teste (multiplicada por `max_chunks` para gerar `--clip-end-s`).
+  - Input de duração é desabilitado quando há chunks `done` ou transcrição em andamento (não pode mudar com índices já persistidos).
+- **Pré-teste do Whisper** agora funciona:
+  - Implementado via `clip_timestamps="0,N"` (parâmetro nativo do openai-whisper) — sem fatiamento de arquivo, sem I/O extra.
+  - Denominador do progresso usa `clip_end` (não a duração total) para que a barra chegue a 100% na janela do pré-teste.
+  - Resultado final carrega `"pretest": true` no JSON; o Node detecta e marca a comparação como `partial: true` (status `pending`).
+- **Removido `PretestModal`**: inputs inline de `chunk_duration_s` e `max_chunks` no `AudioStep` (mais descobríveis, sem modal separada).
+- **Helpers puros `clampChunkDuration` e `computeClipEndS`** em `src/main/chunkMath.ts`, com 14 testes Vitest em `src/main/chunkMath.test.ts`. Configurado `vitest.config.ts` separado (plugins do Electron não fazem sentido em testes unitários).
+- **UX de "pedir mais N chunks" no AudioStep**:
+  - Quando há chunks `done` (resume), o label do input vira **"Adicionar mais N chunks"** e o botão principal dinâmico mostra **"Continuar + N chunk(s)"** quando o usuário preenche um valor > 0.
+  - O banner amarelo de "transcrição anterior interrompida" explica a soma: "Com Adicionar mais N você chega a X de Y processados. Use 0 para retomar do próximo chunk não processado em diante."
+  - Comportamento real: o `maxChunks` no Gemma é interpretado como "N chunks **novos** a partir do `doneChunksCount + 1`" (o Python processa N e para, o checkpoint derivado pelo Node garante o resume). No Whisper, `maxChunks * chunkDurationS` define a janela `[0, N*dur]` — a semântica é diferente (transcreve do início até N*dur, não os próximos N), e o usuário é avisado pelo banner que a janela é cumulativa no eixo do tempo.
+  - O `maxChunks` continua não-persistido (parâmetro da execução): volta a 0 ao recarregar a comparação.
+- **Fix de alucinações CJK no Whisper** (`sanitize_initial_prompt` em `transcribe_whisper.py`):
+  - Sintoma: tokens em chinês (其其其, 人們認識, 瞳孫瞳) apareciam no meio de transcrições em pt-BR quando o documento original terminava com citações, rodapés ou referências em outros idiomas.
+  - Causa: o Whisper usa `initial_prompt` como viés de vocabulário. O final do documento era jogado direto no prompt e o modelo "aprendia" a gerar esses caracteres.
+  - Fix: nova função `sanitize_initial_prompt(text, max_chars=1000)` filtra o contexto para manter apenas `[A-Za-zÀ-ÖØ-öø-ÿ]` + dígitos + pontuação comum + espaço. Tudo fora vira espaço, whitespace é colapsado, e o resultado é o **fim** do texto (o Whisper só usa os últimos ~224 tokens). Se não sobrar nada útil, retorna `None` (sem prompt — Whisper usa o idioma `--language=pt` puro).
+  - Cobre: CJK, cirílico, árabe, emoji, símbolos não-latinos. Mantém acentos BR (Coração, pêssego).
+- **ESLint** ainda não está instalado no projeto (`npm run lint` falha com `eslint: command not found`). Pendente para um próximo agente configurar.
+
+## ✅ Implementado hoje (2026-06-11)
+
+### Player de Áudio por Segmento (Whisper)
+- **Migração v4/v5 do SQLite**: 
+  - v4: colunas `diff_result_chunks` (JSON) e `audio_path` (TEXT).
+  - v5: coluna `whisper_segments_json` (JSON) para guardar segments com timestamps do Whisper.
+- **Backend** (`fileProcessor.ts`): 
+  - `compareTextsWithChunks()` — mapeia cada palavra do diff para o chunk de origem.
+  - `mapDiffToWhisperSegments()` — mapeia cada palavra do diff para o segmento do Whisper correspondente (usando timestamps reais).
+- **Testes**: `fileProcessor.test.ts` com 8 casos de teste.
+- **Protocolo de áudio**: `app-audio://<comparisonId>` registrado no main process via `protocol.registerFileProtocol`, validando que o arquivo existe antes de servir.
+- **Novos canais IPC**:
+  - `get-comparison-diff-chunks` — retorna o diff com chunkIndex.
+  - `get-comparison-audio-info` — retorna `{ available, reason }` validando existência do arquivo.
+  - `get-comparison-whisper-segments` — retorna segments com timestamps do Whisper.
+- **Componentes frontend**:
+  - `ComparisonView.tsx` — em cada palavra adicionada/omitida/alterada, aparece um botão 🔊 ao passar o mouse. Ao clicar, toca o áudio a partir de `segment.start - 5s` (margem de contexto) até `segment.end`. Usa os **segments reais do Whisper** (não chunks de processamento), dando precisão de segundos.
+  - `ResultStep.tsx` — busca lazy dos segments e info de áudio ao montar.
+- **Persistência**: 
+  - `finalizeComparison()` gera e grava `diff_result_chunks` em try/catch isolado.
+  - Ao finalizar o Whisper, extrai os segments do resultado JSON e persiste em `whisper_segments_json`.
+
 ## Próximos passos pendentes (opcional)
 
 - Testar transcrição com Whisper Large v3 usando áudio real de 85 min.
@@ -110,3 +158,6 @@ openai-whisper
 - Adicionar indicador de tempo estimado na UI.
 - Testar modelo 12B em máquina com mais RAM.
 - Adicionar tratamento específico para erro de memória na UI.
+- Configurar ESLint e resolver `npm run lint`.
+- Adicionar testes para `fileProcessor.compareTexts` e `calculateAccuracy`.
+- Adicionar testes de queries do `DatabaseManager` com SQLite em memória.

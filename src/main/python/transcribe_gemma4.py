@@ -1,18 +1,55 @@
 #!/usr/bin/env python3
-"""CLI script for audio transcription using Gemma 4 with chunking and checkpoint support."""
+"""CLI script for audio transcription using Gemma 4 with chunking and checkpoint support.
+
+Protocolo de saída:
+  - stderr: uma linha JSON por evento, com discriminador `type`:
+      * "progress"      — progresso genérico (campo extra aceito via kwargs)
+      * "chunk_start"   — antes de processar um chunk
+      * "chunk_done"    — chunk concluído com sucesso (text + duration_ms)
+      * "chunk_error"   — chunk falhou (error_message)
+      * "error"         — erro fatal (e o processo sai com código ≠ 0)
+  - stdout: linha final com {"type": "result", "text": ...} em sucesso (exit 0)
+"""
 
 import argparse
 import json
 import math
 import os
 import sys
+import time
+from typing import Any
 
 import librosa
 import torch
 
 
-def log_progress(progress: int, message: str) -> None:
-    print(json.dumps({"type": "progress", "progress": progress, "message": message}), file=sys.stderr, flush=True)
+def log_progress(progress: int, message: str, **extra: Any) -> None:
+    """Emite um evento de progresso em stderr como JSON de uma linha.
+
+    Aceita campos extras opcionais (ex: chunk_index, chunk_start_s, total_chunks)
+    que são fundidos no payload. Campos fixos não são sobrescritos.
+    """
+    payload: dict[str, Any] = {"type": "progress", "progress": progress, "message": message}
+    for k, v in extra.items():
+        if k in payload:
+            continue
+        payload[k] = v
+    print(json.dumps(payload, ensure_ascii=False), file=sys.stderr, flush=True)
+
+
+def log_event(event_type: str, **fields: Any) -> None:
+    """Emite um evento estruturado de chunk_start/chunk_done/chunk_error.
+
+    Exemplo:
+        log_event("chunk_start", chunk_index=0, chunk_start_s=0.0,
+                  chunk_end_s=30.0, total_chunks=10)
+    """
+    payload: dict[str, Any] = {"type": event_type}
+    for k, v in fields.items():
+        if k in payload:
+            continue
+        payload[k] = v
+    print(json.dumps(payload, ensure_ascii=False), file=sys.stderr, flush=True)
 
 
 def log_error(message: str) -> None:
@@ -30,6 +67,9 @@ def load_checkpoint(checkpoint_path: str) -> dict:
 
 
 def save_checkpoint(checkpoint_path: str, data: dict) -> None:
+    """Escreve o checkpoint. É tratado pelo Node como artefato derivado:
+    a tabela `chunks` no DB é a fonte de verdade e pode regenerar este
+    arquivo a qualquer momento."""
     try:
         with open(checkpoint_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -47,6 +87,14 @@ def main() -> None:
     parser.add_argument("--context", default="", help="Texto do documento original para contextualizar a transcrição")
     parser.add_argument("--low-memory", action="store_true", help="Força mais offload para disco (mais lento, usa menos RAM)")
     parser.add_argument("--cache-dir", default="", help="Diretório de cache do Hugging Face (para modelos embutidos no pacote)")
+    parser.add_argument(
+        "--max-chunks",
+        type=int,
+        default=0,
+        help="Processa no máximo este número de chunks novos (0 = todos). "
+             "Usado pelo modo 'pré-teste' do app: processa só os primeiros N "
+             "chunks para validar antes de rodar o áudio inteiro.",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.audio):
@@ -174,15 +222,49 @@ Transcreva o conteúdo deste áudio em português, palavra por palavra."""
     else:
         system_prompt = "Transcreva o conteúdo deste áudio em português, palavra por palavra."
 
-    for i in range(completed_count, total_chunks):
+    # Limite de chunks: pré-teste vs. transcrição completa.
+    # --max-chunks N ⇒ processa no máximo N chunks novos (além dos já
+    # concluídos do checkpoint). 0 = sem limite (roda tudo).
+    max_new = args.max_chunks if args.max_chunks > 0 else (total_chunks - completed_count)
+    end_index = min(total_chunks, completed_count + max_new)
+    is_pretest = args.max_chunks > 0 and end_index < total_chunks
+
+    if is_pretest:
+        log_progress(
+            55,
+            f"Pré-teste: processando {end_index - completed_count} chunk(s) "
+            f"({completed_count + 1}–{end_index} de {total_chunks})...",
+        )
+
+    for i in range(completed_count, end_index):
         start = i * chunk_samples
         end = min(start + chunk_samples, total_samples)
         chunk = audio[start:end]
+        chunk_start_s = start / sr
+        chunk_end_s = end / sr
 
+        # Emite chunk_start ANTES do processamento (Node vai upsertar com
+        # status='transcribing' e o painel mostra o spinner).
+        log_event(
+            "chunk_start",
+            chunk_index=i,
+            chunk_start_s=chunk_start_s,
+            chunk_end_s=chunk_end_s,
+            total_chunks=total_chunks,
+        )
+
+        # Mantém uma linha de progresso "genérico" para a TranscriptionModal
+        # (que ainda lê progress+message). Será removida quando migrarmos
+        # a modal para consumir eventos estruturados.
         progress_start = 60
         progress_end = 95
         chunk_progress = progress_start + int(((i + 1) / total_chunks) * (progress_end - progress_start))
-        log_progress(chunk_progress, f"Chunk {i + 1}/{total_chunks} — transcrevendo...")
+        log_progress(
+            chunk_progress,
+            f"Chunk {i + 1}/{total_chunks} — transcrevendo...",
+        )
+
+        chunk_t0 = time.monotonic()
 
         try:
             messages = [
@@ -203,7 +285,7 @@ Transcreva o conteúdo deste áudio em português, palavra por palavra."""
             if device != "cpu":
                 inputs = inputs.to(device)
         except Exception as e:
-            log_error(f"Falha ao processar chunk {i + 1}: {e}")
+            log_event("chunk_error", chunk_index=i, error_message=f"Falha ao processar chunk: {e}")
             sys.exit(1)
 
         try:
@@ -218,10 +300,23 @@ Transcreva o conteúdo deste áudio em português, palavra por palavra."""
             if chunk_text.strip():
                 results.append(chunk_text.strip())
         except Exception as e:
-            log_error(f"Falha na geração da transcrição no chunk {i + 1}: {e}")
+            log_event("chunk_error", chunk_index=i, error_message=f"Falha na geração da transcrição: {e}")
             sys.exit(1)
 
-        # Save checkpoint after each chunk
+        duration_ms = int((time.monotonic() - chunk_t0) * 1000)
+
+        # Emite chunk_done com o texto e a duração do processamento.
+        # Node vai upsertar o chunk (status='done', text, duration_ms).
+        log_event(
+            "chunk_done",
+            chunk_index=i,
+            text=(chunk_text.strip() if chunk_text else ""),
+            duration_ms=duration_ms,
+        )
+
+        # Checkpoint derivado: o Node pode regenerá-lo a partir do DB, mas
+        # mantemos a escrita local para retomar dentro da mesma sessão
+        # (sem precisar ir ao DB a cada chunk).
         if checkpoint_path:
             save_checkpoint(checkpoint_path, {
                 "audio": args.audio,
@@ -230,11 +325,17 @@ Transcreva o conteúdo deste áudio em português, palavra por palavra."""
                 "results": results,
             })
 
-    log_progress(100, "Transcription complete.")
+    if is_pretest:
+        # Pré-teste terminou antes do áudio inteiro. Não marca a comparação
+        # como completa: o Node usa o discriminador `pretest` no payload
+        # para manter a comparação em 'pending' com os chunks já em 'done'.
+        log_progress(100, f"Pré-teste concluído: {len(results)}/{total_chunks} chunk(s).")
+    else:
+        log_progress(100, "Transcription complete.")
 
     full_text = " ".join(results)
-    result = {"type": "result", "text": full_text}
-    print(json.dumps(result), flush=True)
+    result = {"type": "result", "text": full_text, "pretest": is_pretest}
+    print(json.dumps(result, ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":

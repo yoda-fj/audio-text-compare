@@ -1,13 +1,15 @@
-import { Save, RotateCcw } from 'lucide-react'
-import { ComparisonResult } from '../../types'
+import { useState, useEffect } from 'react'
+import { RotateCcw } from 'lucide-react'
+import { ComparisonResult, ChunkRun } from '../../types'
 import ComparisonView from '../ComparisonView'
+import ChunkListPanel from '../ChunkListPanel'
 
 interface ResultStepProps {
   comparison: ComparisonResult | null
-  selectedModel: string
-  documentPath: string | null
-  audioPath: string | null
-  onSave: () => void
+  comparisonId?: number
+  chunks: ChunkRun[]
+  onViewChunkDetail: (chunk: ChunkRun) => void
+  onRetryChunk: (chunkIndex: number) => void
   onNewComparison: () => void
 }
 
@@ -31,9 +33,24 @@ const getAccuracyLabel = (accuracy: number) => {
 
 export default function ResultStep({
   comparison,
-  onSave,
+  comparisonId,
+  chunks,
+  onViewChunkDetail,
+  onRetryChunk,
   onNewComparison,
 }: ResultStepProps) {
+  const [audioAvailable, setAudioAvailable] = useState(false)
+
+  useEffect(() => {
+    if (!comparisonId) return
+
+    // Verifica disponibilidade do áudio
+    window.electronAPI
+      .getComparisonAudioInfo(comparisonId)
+      .then((info) => setAudioAvailable(info.available))
+      .catch(() => setAudioAvailable(false))
+  }, [comparisonId])
+
   if (!comparison) {
     return (
       <div className="card p-8 text-center text-gray-500 animate-fade-in">
@@ -72,17 +89,25 @@ export default function ResultStep({
             <RotateCcw className="w-4 h-4" />
             Nova comparação
           </button>
-          <button
-            onClick={onSave}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Save className="w-4 h-4" />
-            Salvar comparação
-          </button>
         </div>
       </div>
 
-      <ComparisonView diff={comparison.diff} />
+      {/* Painel de chunks: presente quando a transcrição foi persistida por
+          chunks (Gemma ou Whisper via o chunk sintético). Comparações
+          legadas (v1) não têm chunks — aí só mostramos o diff. */}
+      {chunks.length > 0 && (
+        <ChunkListPanel
+          chunks={chunks}
+          onViewDetail={onViewChunkDetail}
+          onRetry={onRetryChunk}
+        />
+      )}
+
+      <ComparisonView
+        diff={comparison.diff}
+        comparisonId={comparisonId}
+        audioAvailable={audioAvailable}
+      />
     </div>
   )
 }
