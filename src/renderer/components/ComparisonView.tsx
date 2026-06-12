@@ -25,6 +25,12 @@ interface ComparisonViewProps {
 
 type ViewMode = 'side-by-side' | 'inline'
 
+/**
+ * Margem de segurança ANTES do trecho da palavra clicada, em segundos.
+ * Ao clicar numa palavra, o player volta este tanto antes do início do
+ * segmento para o usuário ouvir a frase completa (com contexto), não
+ * só a palavra isolada. O auto-stop continua no `end` do segmento.
+ */
 const MARGIN_BEFORE_S = 5
 
 const ComparisonView: React.FC<ComparisonViewProps> = ({
@@ -115,7 +121,11 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
     const audio = audioRef.current
     if (!audio || !comparisonId) return false
     const expectedSrc = `app-audio://${comparisonId}`
-    if (audio.src !== expectedSrc) {
+    // `audio.src` retorna a URL RESOLVIDA (ex.: "app-audio://5/" com barra
+    // final), nunca idêntica à string atribuída. Comparação tolerante para
+    // não reatribuir o src (e recarregar o áudio) a cada clique em palavra.
+    const currentSrc = audio.src.replace(/\/+$/, '')
+    if (currentSrc !== expectedSrc) {
       audio.src = expectedSrc
     }
     if (audio.readyState >= 1) return true
@@ -131,8 +141,8 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
 
   /**
    * Toca o trecho do áudio referente a uma palavra do diff.
-   * Move o player para o tempo da palavra e começa a tocar.
-   * Auto-pausa no fim do trecho.
+   * Começa `MARGIN_BEFORE_S` segundos ANTES do início do segmento (para
+   * pegar a frase completa) e auto-pausa no fim do trecho.
    */
   const seekToWord = useCallback(
     async (wordIndex: number) => {
@@ -143,13 +153,18 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
 
       const start = Math.max(0, timing.start - MARGIN_BEFORE_S)
       const end = timing.end
-      setAutoStopAt(end)
 
       const ok = await ensureLoaded()
       if (!ok) return
 
+      // Pausa ANTES do seek e só arma o auto-stop DEPOIS de posicionar o
+      // currentTime. Se o auto-stop fosse armado antes, um `timeupdate`
+      // residual da posição antiga (possivelmente > end) dispararia a
+      // parada automática na hora e cancelaria o playback do trecho.
+      audio.pause()
       audio.currentTime = start
       setCurrentTime(start)
+      setAutoStopAt(end)
       setAudioDuration(audio.duration || 0)
       try {
         await audio.play()
@@ -221,8 +236,10 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
   }) => {
     const timing = hasTimings ? wordTimings[idx] : null
     const canPlay = hasTimings && timing != null
+    // Mostra o intervalo que SERÁ tocado (já com a margem de 5s antes,
+    // clampada em 0 para palavras no começo do áudio).
     const timeLabel = canPlay && timing
-      ? `${formatTime(timing.start - MARGIN_BEFORE_S)} – ${formatTime(timing.end)}`
+      ? `${formatTime(Math.max(0, timing.start - MARGIN_BEFORE_S))} – ${formatTime(timing.end)}`
       : null
 
     // Tooltip composto: tipo da palavra + tempo (se disponível)
@@ -351,8 +368,9 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
           <>
             <strong>Como usar:</strong> passe o mouse sobre uma palavra omitida/adicionada/alterada
             para ver a faixa de tempo. <strong>Clique na palavra</strong> para
-            pular o player até o trecho e tocar. O player no topo mostra o tempo
-            atual e o total do áudio.
+            pular o player até o trecho e tocar — a reprodução começa{' '}
+            <strong>{MARGIN_BEFORE_S}s antes</strong> do trecho, para você ouvir
+            a frase completa, e para automaticamente no fim dele.
           </>
         ) : audioAvailable ? (
           <>
