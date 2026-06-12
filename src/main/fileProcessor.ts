@@ -230,21 +230,30 @@ export class FileProcessor {
    * Mapeia cada palavra do diff para o segmento do Whisper correspondente.
    * Retorna um array com o mesmo comprimento do diff, onde cada elemento
    * contém { start, end } do segmento onde aquela palavra aparece.
-   * 
+   *
    * Para palavras 'removed', usa o segmento mais próximo (anterior ou primeiro).
+   *
+   * Alinhamento do contador: o `diffWords` separa pontuação das palavras
+   * quando ela difere entre os textos ("casa." vs "casa," → equal "casa" +
+   * removed "." + added ","), mas os segments do Whisper têm a pontuação
+   * grudada na palavra ("casa," = 1 token). Itens só de pontuação NÃO
+   * incrementam o contador de palavras transcritas — senão o mapeamento
+   * deriva para o futuro do áudio, com erro crescente ao longo do texto.
    */
   mapDiffToWhisperSegments(
     diff: DiffItem[],
     segments: Array<{ start: number; end: number; text: string }>
   ): Array<{ start: number; end: number }> {
     const tokenize = (s: string) => this.normalizeText(s).trim().split(/\s+/).filter((w) => w.length > 0)
-    
-    // Pré-calcula o acumulado de palavras por segmento
+    const hasWordChars = (s: string) => /[\p{L}\p{N}]/u.test(s)
+    const countWords = (s: string) => tokenize(s).filter(hasWordChars).length
+
+    // Pré-calcula o acumulado de palavras por segmento (mesmo critério de
+    // contagem usado para o diff: só tokens com letra/dígito).
     const segmentBoundaries: number[] = []
     let cumulative = 0
     for (const seg of segments) {
-      const segWords = tokenize(seg.text)
-      cumulative += segWords.length
+      cumulative += countWords(seg.text)
       segmentBoundaries.push(cumulative)
     }
 
@@ -263,7 +272,10 @@ export class FileProcessor {
         const segIdx = this.findChunkIndex(transcribedWordCount, segmentBoundaries)
         const seg = segments[segIdx] || segments[segments.length - 1] || { start: 0, end: 0 }
         result.push({ start: seg.start, end: seg.end })
-        transcribedWordCount++
+        // Pontuação isolada não conta como palavra transcrita
+        if (hasWordChars(item.value ?? '')) {
+          transcribedWordCount++
+        }
       }
     }
 

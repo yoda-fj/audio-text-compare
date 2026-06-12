@@ -637,6 +637,17 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
 
 /**
  * Mapeia cada palavra do diff para o segmento do Whisper correspondente.
+ *
+ * IMPORTANTE — alinhamento do contador: o `diffWords` separa pontuação
+ * das palavras quando ela difere entre os textos (ex.: "casa." vs "casa,"
+ * vira `equal "casa"` + `removed "."` + `added ","`). Já os segments do
+ * Whisper têm a pontuação GRUDADA na palavra ("casa," = 1 token). Se cada
+ * item equal/added contasse como palavra, cada pontuação divergente
+ * somaria +1 no contador e o mapeamento iria derivando para o FUTURO do
+ * áudio — quanto mais longe no texto, maior o erro. Por isso:
+ *   - só itens com caractere de palavra (letra/dígito) incrementam o
+ *     contador;
+ *   - a contagem de palavras dos segments usa o MESMO critério.
  */
 function mapDiffToSegments(
   diff: DiffItem[],
@@ -645,13 +656,17 @@ function mapDiffToSegments(
   const normalize = (s: string) =>
     s.toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim()
   const tokenize = (s: string) => normalize(s).split(/\s+/).filter((w) => w.length > 0)
+  // Token "contável" = contém pelo menos uma letra ou dígito. Tokens só
+  // de pontuação (",", "—", "...") não contam — nem no diff, nem nos
+  // segments — para os dois contadores andarem em sincronia.
+  const hasWordChars = (s: string) => /[\p{L}\p{N}]/u.test(s)
+  const countWords = (s: string) => tokenize(s).filter(hasWordChars).length
 
   // Pré-calcula o acumulado de palavras por segmento
   const boundaries: number[] = []
   let cumulative = 0
   for (const seg of segments) {
-    const segWords = tokenize(seg.text)
-    cumulative += segWords.length
+    cumulative += countWords(seg.text)
     boundaries.push(cumulative)
   }
 
@@ -675,8 +690,22 @@ function mapDiffToSegments(
       const segIdx = findSegmentIndex(transcribedWordCount)
       const seg = segments[segIdx] || segments[segments.length - 1] || { start: 0, end: 0 }
       result.push({ start: seg.start, end: seg.end })
-      transcribedWordCount++
+      // Pontuação isolada recebe o timing da posição atual, mas NÃO
+      // incrementa o contador (evita o drift descrito acima).
+      if (hasWordChars(item.value ?? '')) {
+        transcribedWordCount++
+      }
     }
+  }
+
+  // Sanidade (só log): se as contagens divergirem, o mapeamento ainda tem
+  // alguma fonte de drift — ajuda a diagnosticar sem quebrar a UI.
+  if (cumulative > 0 && transcribedWordCount !== cumulative) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[Sync] Contagem de palavras divergente: diff=${transcribedWordCount}, segments=${cumulative}. ` +
+      'O mapeamento palavra↔tempo pode estar impreciso no fim do áudio.'
+    )
   }
 
   return result

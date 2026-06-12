@@ -299,6 +299,30 @@ describe('mapDiffToWhisperSegments', () => {
     expect(timings[5]).toEqual({ start: 2, end: 4 })
   })
 
+  it('pontuação isolada no diff NÃO desalinha o mapeamento (regressão: drift)', () => {
+    // Cenário real: o diffWords separa pontuação divergente da palavra
+    // ("casa." vs "casa," → equal 'casa' + removed '.' + added ','). Os
+    // segments do Whisper têm a pontuação grudada na palavra, então se o
+    // item ',' contasse como palavra, todas as palavras SEGUINTES seriam
+    // mapeadas um segment à frente — drift que cresce ao longo do áudio
+    // e faz o clique apontar para um ponto futuro errado.
+    const diff: DiffItem[] = [
+      { type: 'equal', value: 'ola' },
+      { type: 'added', value: ',' }, // pontuação isolada — não conta
+      { type: 'equal', value: 'mundo' },
+      { type: 'equal', value: 'como' },
+      { type: 'equal', value: 'vai' },
+    ]
+
+    expect(fp.mapDiffToWhisperSegments(diff, segments)).toEqual([
+      { start: 0, end: 2 }, // ola   → seg A
+      { start: 0, end: 2 }, // ','   → seg A (timing da posição atual)
+      { start: 0, end: 2 }, // mundo → seg A (sem a correção cairia em B)
+      { start: 2, end: 4 }, // como  → seg B
+      { start: 2, end: 4 }, // vai   → seg B
+    ])
+  })
+
   it('retorna array com o mesmo comprimento do diff', () => {
     const diff: DiffItem[] = [
       { type: 'equal', value: 'ola' },
