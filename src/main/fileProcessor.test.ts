@@ -323,6 +323,41 @@ describe('mapDiffToWhisperSegments', () => {
     ])
   })
 
+  it('ressincroniza quando o diff pula uma palavra (drift para trás)', () => {
+    // 'mundo' não aparece no diff. Com contagem cega, 'como' seria a 2ª
+    // palavra contada e cairia no seg A (errado) — o áudio tocaria o
+    // trecho anterior e pararia ANTES da palavra clicada. Com alinhamento
+    // por conteúdo, 'como' é encontrada à frente e o ponteiro ressincroniza.
+    const diff: DiffItem[] = [
+      { type: 'equal', value: 'ola' },
+      { type: 'equal', value: 'como' },
+      { type: 'equal', value: 'vai' },
+    ]
+
+    expect(fp.mapDiffToWhisperSegments(diff, segments)).toEqual([
+      { start: 0, end: 2 }, // ola  → seg A
+      { start: 2, end: 4 }, // como → seg B (ressincronizado)
+      { start: 2, end: 4 }, // vai  → seg B
+    ])
+  })
+
+  it('palavra desconhecida não avança o ponteiro (drift para frente)', () => {
+    // 'xyz' não existe nos segments. Com contagem cega, ela empurraria o
+    // contador e 'mundo' cairia no seg B (futuro errado). Com alinhamento,
+    // o miss não avança o ponteiro e 'mundo' continua no seg A.
+    const diff: DiffItem[] = [
+      { type: 'equal', value: 'ola' },
+      { type: 'added', value: 'xyz' },
+      { type: 'equal', value: 'mundo' },
+    ]
+
+    expect(fp.mapDiffToWhisperSegments(diff, segments)).toEqual([
+      { start: 0, end: 2 }, // ola   → seg A
+      { start: 0, end: 2 }, // xyz   → seg A (posição atual, sem avançar)
+      { start: 0, end: 2 }, // mundo → seg A (sem a correção cairia em B)
+    ])
+  })
+
   it('retorna array com o mesmo comprimento do diff', () => {
     const diff: DiffItem[] = [
       { type: 'equal', value: 'ola' },

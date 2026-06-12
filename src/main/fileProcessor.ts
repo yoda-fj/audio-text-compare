@@ -231,51 +231,80 @@ export class FileProcessor {
    * Retorna um array com o mesmo comprimento do diff, onde cada elemento
    * contém { start, end } do segmento onde aquela palavra aparece.
    *
-   * Para palavras 'removed', usa o segmento mais próximo (anterior ou primeiro).
-   *
-   * Alinhamento do contador: o `diffWords` separa pontuação das palavras
-   * quando ela difere entre os textos ("casa." vs "casa," → equal "casa" +
-   * removed "." + added ","), mas os segments do Whisper têm a pontuação
-   * grudada na palavra ("casa," = 1 token). Itens só de pontuação NÃO
-   * incrementam o contador de palavras transcritas — senão o mapeamento
-   * deriva para o futuro do áudio, com erro crescente ao longo do texto.
+   * Estratégia: alinhamento POR CONTEÚDO com ressincronização, não por
+   * contagem cega — a contagem acumula erro quando a tokenização do diff
+   * diverge da dos segments (pontuação separada pelo diffWords, hífens
+   * repartidos, grafias divergentes), e o erro cresce ao longo do áudio.
+   * Cada palavra transcrita é procurada (pelo núcleo, sem pontuação) numa
+   * janela à frente na lista plana de palavras dos segments; matches
+   * ressincronizam o ponteiro, misses não avançam. Palavras 'removed'
+   * (não faladas) usam o segmento da última palavra transcrita vista.
    */
   mapDiffToWhisperSegments(
     diff: DiffItem[],
     segments: Array<{ start: number; end: number; text: string }>
   ): Array<{ start: number; end: number }> {
     const tokenize = (s: string) => this.normalizeText(s).trim().split(/\s+/).filter((w) => w.length > 0)
-    const hasWordChars = (s: string) => /[\p{L}\p{N}]/u.test(s)
-    const countWords = (s: string) => tokenize(s).filter(hasWordChars).length
+    /** Núcleo da palavra: só letras e dígitos (descarta pontuação grudada). */
+    const wordCore = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, '')
 
-    // Pré-calcula o acumulado de palavras por segmento (mesmo critério de
-    // contagem usado para o diff: só tokens com letra/dígito).
-    const segmentBoundaries: number[] = []
-    let cumulative = 0
-    for (const seg of segments) {
-      cumulative += countWords(seg.text)
-      segmentBoundaries.push(cumulative)
+    // Lista plana das palavras de todos os segments, na ordem do áudio.
+    const segWords: Array<{ core: string; segIdx: number }> = []
+    segments.forEach((seg, i) => {
+      for (const tok of tokenize(seg.text)) {
+        const core = wordCore(tok)
+        if (core) segWords.push({ core, segIdx: i })
+      }
+    })
+
+    const segTimingAt = (i: number): { start: number; end: number } => {
+      if (segWords.length === 0) {
+        const first = segments[0]
+        return first ? { start: first.start, end: first.end } : { start: 0, end: 0 }
+      }
+      const clamped = Math.max(0, Math.min(i, segWords.length - 1))
+      const seg = segments[segWords[clamped].segIdx]
+      return seg ? { start: seg.start, end: seg.end } : { start: 0, end: 0 }
     }
 
+    // Janela de busca à frente: grande o bastante para pular ruídos locais
+    // de tokenização, pequena o bastante para não casar com uma repetição
+    // distante da mesma palavra ("de", "que"...).
+    const LOOKAHEAD = 8
+
     const result: Array<{ start: number; end: number }> = []
-    let transcribedWordCount = 0
+    let pos = 0 // ponteiro em segWords
 
     for (const item of diff) {
       if (item.type === 'removed') {
-        // Para palavras removidas, usa o segmento anterior ou o primeiro
-        const prevIndex = Math.max(0, transcribedWordCount - 1)
-        const segIdx = this.findChunkIndex(prevIndex, segmentBoundaries)
-        const seg = segments[segIdx] || segments[0] || { start: 0, end: 0 }
-        result.push({ start: seg.start, end: seg.end })
-      } else {
-        // equal ou added — mapeia para o segmento correspondente
-        const segIdx = this.findChunkIndex(transcribedWordCount, segmentBoundaries)
-        const seg = segments[segIdx] || segments[segments.length - 1] || { start: 0, end: 0 }
-        result.push({ start: seg.start, end: seg.end })
-        // Pontuação isolada não conta como palavra transcrita
-        if (hasWordChars(item.value ?? '')) {
-          transcribedWordCount++
+        // Palavra omitida no áudio: segmento da última palavra falada.
+        result.push(segTimingAt(pos - 1))
+        continue
+      }
+
+      const core = wordCore(this.normalizeText(item.value ?? ''))
+      if (!core) {
+        // Pontuação isolada: posição atual, sem avançar.
+        result.push(segTimingAt(pos))
+        continue
+      }
+
+      let found = -1
+      const limit = Math.min(segWords.length, pos + LOOKAHEAD)
+      for (let j = pos; j < limit; j++) {
+        if (segWords[j].core === core) {
+          found = j
+          break
         }
+      }
+
+      if (found >= 0) {
+        result.push(segTimingAt(found))
+        pos = found + 1
+      } else {
+        // Não encontrou: posição atual sem avançar — o próximo match
+        // ressincroniza o ponteiro.
+        result.push(segTimingAt(pos))
       }
     }
 

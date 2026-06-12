@@ -29,9 +29,17 @@ type ViewMode = 'side-by-side' | 'inline'
  * Margem de segurança ANTES do trecho da palavra clicada, em segundos.
  * Ao clicar numa palavra, o player volta este tanto antes do início do
  * segmento para o usuário ouvir a frase completa (com contexto), não
- * só a palavra isolada. O auto-stop continua no `end` do segmento.
+ * só a palavra isolada.
  */
 const MARGIN_BEFORE_S = 5
+
+/**
+ * Margem DEPOIS do fim do segmento, em segundos, antes do auto-stop.
+ * Os timestamps do Whisper têm erro de até ~1s nas bordas; sem esta
+ * folga, o corte seco no `end` podia parar o áudio antes de a palavra
+ * clicada terminar de ser falada.
+ */
+const MARGIN_AFTER_S = 2
 
 const ComparisonView: React.FC<ComparisonViewProps> = ({
   diff,
@@ -152,7 +160,7 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
       if (!timing) return
 
       const start = Math.max(0, timing.start - MARGIN_BEFORE_S)
-      const end = timing.end
+      const end = timing.end + MARGIN_AFTER_S
 
       const ok = await ensureLoaded()
       if (!ok) return
@@ -236,10 +244,10 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
   }) => {
     const timing = hasTimings ? wordTimings[idx] : null
     const canPlay = hasTimings && timing != null
-    // Mostra o intervalo que SERÁ tocado (já com a margem de 5s antes,
-    // clampada em 0 para palavras no começo do áudio).
+    // Mostra o intervalo que SERÁ tocado (margem de 5s antes, clampada em
+    // 0 para palavras no começo do áudio, e 2s de folga depois).
     const timeLabel = canPlay && timing
-      ? `${formatTime(Math.max(0, timing.start - MARGIN_BEFORE_S))} – ${formatTime(timing.end)}`
+      ? `${formatTime(Math.max(0, timing.start - MARGIN_BEFORE_S))} – ${formatTime(timing.end + MARGIN_AFTER_S)}`
       : null
 
     // Tooltip composto: tipo da palavra + tempo (se disponível)
@@ -638,16 +646,26 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
 /**
  * Mapeia cada palavra do diff para o segmento do Whisper correspondente.
  *
- * IMPORTANTE — alinhamento do contador: o `diffWords` separa pontuação
- * das palavras quando ela difere entre os textos (ex.: "casa." vs "casa,"
- * vira `equal "casa"` + `removed "."` + `added ","`). Já os segments do
- * Whisper têm a pontuação GRUDADA na palavra ("casa," = 1 token). Se cada
- * item equal/added contasse como palavra, cada pontuação divergente
- * somaria +1 no contador e o mapeamento iria derivando para o FUTURO do
- * áudio — quanto mais longe no texto, maior o erro. Por isso:
- *   - só itens com caractere de palavra (letra/dígito) incrementam o
- *     contador;
- *   - a contagem de palavras dos segments usa o MESMO critério.
+ * Estratégia: alinhamento POR CONTEÚDO com ressincronização — não por
+ * contagem cega de palavras. A contagem acumula erro quando a tokenização
+ * do diff diverge da dos segments (pontuação separada pelo diffWords,
+ * hífens repartidos, grafias que o Whisper junta/separa), e o erro cresce
+ * ao longo do áudio — sintomas: clique aponta para o futuro (drift pra
+ * frente) ou o áudio para antes da palavra (drift pra trás).
+ *
+ * Como funciona:
+ * 1. Achata as palavras de todos os segments numa lista ordenada, cada
+ *    uma com o índice do segment de origem e o "núcleo" (só letras/dígitos,
+ *    sem pontuação grudada).
+ * 2. Para cada palavra transcrita do diff (equal/added/changed), procura o
+ *    núcleo numa janela à frente a partir da posição atual:
+ *      - achou → usa o segment dela e avança o ponteiro para depois dela
+ *        (qualquer desalinhamento local se autocorrige aqui);
+ *      - não achou → usa a posição atual SEM avançar (o próximo match
+ *        ressincroniza; avançar no escuro reintroduziria drift).
+ * 3. Pontuação isolada recebe o timing da posição atual, sem avançar.
+ * 4. `removed` (palavra só do documento, não falada) usa o segment da
+ *    última palavra transcrita vista — o melhor vizinho disponível.
  */
 function mapDiffToSegments(
   diff: DiffItem[],
@@ -656,56 +674,68 @@ function mapDiffToSegments(
   const normalize = (s: string) =>
     s.toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim()
   const tokenize = (s: string) => normalize(s).split(/\s+/).filter((w) => w.length > 0)
-  // Token "contável" = contém pelo menos uma letra ou dígito. Tokens só
-  // de pontuação (",", "—", "...") não contam — nem no diff, nem nos
-  // segments — para os dois contadores andarem em sincronia.
-  const hasWordChars = (s: string) => /[\p{L}\p{N}]/u.test(s)
-  const countWords = (s: string) => tokenize(s).filter(hasWordChars).length
+  /** Núcleo da palavra: só letras e dígitos (descarta pontuação grudada). */
+  const wordCore = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, '')
 
-  // Pré-calcula o acumulado de palavras por segmento
-  const boundaries: number[] = []
-  let cumulative = 0
-  for (const seg of segments) {
-    cumulative += countWords(seg.text)
-    boundaries.push(cumulative)
-  }
-
-  const findSegmentIndex = (wordIndex: number): number => {
-    for (let i = 0; i < boundaries.length; i++) {
-      if (wordIndex < boundaries[i]) return i
+  // Lista plana das palavras de todos os segments, na ordem do áudio.
+  const segWords: Array<{ core: string; segIdx: number }> = []
+  segments.forEach((seg, i) => {
+    for (const tok of tokenize(seg.text)) {
+      const core = wordCore(tok)
+      if (core) segWords.push({ core, segIdx: i })
     }
-    return Math.max(0, boundaries.length - 1)
+  })
+
+  /** Timing do segment da palavra na posição `i` (clampado nas bordas). */
+  const segTimingAt = (i: number): { start: number; end: number } => {
+    if (segWords.length === 0) {
+      const first = segments[0]
+      return first ? { start: first.start, end: first.end } : { start: 0, end: 0 }
+    }
+    const clamped = Math.max(0, Math.min(i, segWords.length - 1))
+    const seg = segments[segWords[clamped].segIdx]
+    return seg ? { start: seg.start, end: seg.end } : { start: 0, end: 0 }
   }
+
+  // Janela de busca à frente. Pequena de propósito: grande o bastante para
+  // pular ruídos locais de tokenização, pequena o bastante para não casar
+  // com uma repetição distante da mesma palavra ("de", "que"...).
+  const LOOKAHEAD = 8
 
   const result: Array<{ start: number; end: number }> = []
-  let transcribedWordCount = 0
+  let pos = 0 // ponteiro em segWords
 
   for (const item of diff) {
     if (item.type === 'removed') {
-      const prevIndex = Math.max(0, transcribedWordCount - 1)
-      const segIdx = findSegmentIndex(prevIndex)
-      const seg = segments[segIdx] || segments[0] || { start: 0, end: 0 }
-      result.push({ start: seg.start, end: seg.end })
-    } else {
-      const segIdx = findSegmentIndex(transcribedWordCount)
-      const seg = segments[segIdx] || segments[segments.length - 1] || { start: 0, end: 0 }
-      result.push({ start: seg.start, end: seg.end })
-      // Pontuação isolada recebe o timing da posição atual, mas NÃO
-      // incrementa o contador (evita o drift descrito acima).
-      if (hasWordChars(item.value ?? '')) {
-        transcribedWordCount++
+      // Palavra omitida no áudio: usa o segment da última palavra falada.
+      result.push(segTimingAt(pos - 1))
+      continue
+    }
+
+    const core = wordCore(normalize(item.value ?? ''))
+    if (!core) {
+      // Pontuação isolada (criada pelo diffWords): posição atual, sem avançar.
+      result.push(segTimingAt(pos))
+      continue
+    }
+
+    let found = -1
+    const limit = Math.min(segWords.length, pos + LOOKAHEAD)
+    for (let j = pos; j < limit; j++) {
+      if (segWords[j].core === core) {
+        found = j
+        break
       }
     }
-  }
 
-  // Sanidade (só log): se as contagens divergirem, o mapeamento ainda tem
-  // alguma fonte de drift — ajuda a diagnosticar sem quebrar a UI.
-  if (cumulative > 0 && transcribedWordCount !== cumulative) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[Sync] Contagem de palavras divergente: diff=${transcribedWordCount}, segments=${cumulative}. ` +
-      'O mapeamento palavra↔tempo pode estar impreciso no fim do áudio.'
-    )
+    if (found >= 0) {
+      result.push(segTimingAt(found))
+      pos = found + 1
+    } else {
+      // Não encontrou (grafia divergente, token excêntrico): usa a posição
+      // atual sem avançar — o próximo match ressincroniza o ponteiro.
+      result.push(segTimingAt(pos))
+    }
   }
 
   return result
