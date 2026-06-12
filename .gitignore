@@ -64,3 +64,4 @@ assets/models/
 
 # Electron
 out/
+samples/*.mp3

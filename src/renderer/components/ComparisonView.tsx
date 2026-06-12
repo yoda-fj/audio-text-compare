@@ -35,9 +35,9 @@ const MARGIN_BEFORE_S = 5
 
 /**
  * Margem DEPOIS do fim do segmento, em segundos, antes do auto-stop.
- * Os timestamps do Whisper têm erro de até ~1s nas bordas; sem esta
- * folga, o corte seco no `end` podia parar o áudio antes de a palavra
- * clicada terminar de ser falada.
+ * Folga curta apenas para absorver o erro de timestamp do Whisper nas
+ * bordas (≤~1s); sem ela, o corte seco no `end` podia parar o áudio
+ * antes de a palavra clicada terminar de ser falada.
  */
 const MARGIN_AFTER_S = 2
 
@@ -275,9 +275,11 @@ const ComparisonView: React.FC<ComparisonViewProps> = ({
     <div className="space-y-4">
       <audio ref={audioRef} preload="metadata" className="hidden" />
 
-      {/* Player único de áudio — sempre visível. Altura fixa para não
-          empurrar o texto abaixo quando o estado muda. */}
-      <div className="card p-4 bg-white border border-gray-200 shadow-sm min-h-[88px]">
+      {/* Player único de áudio — sempre visível ao rolar a página. Sticky
+          no topo do container de scroll (body/window) e z-10 para ficar
+          acima do texto do diff. Altura fixa para não empurrar o texto
+          abaixo quando o estado muda. */}
+      <div className="card p-4 bg-white border border-gray-200 shadow-sm min-h-[88px] sticky top-0 z-10">
         <div className="flex items-center gap-4">
           {/* Botão play/stop — vira stop enquanto toca */}
           <button

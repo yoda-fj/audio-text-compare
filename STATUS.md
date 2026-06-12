@@ -122,6 +122,9 @@ openai-whisper
   - O banner amarelo de "transcrição anterior interrompida" explica a soma: "Com Adicionar mais N você chega a X de Y processados. Use 0 para retomar do próximo chunk não processado em diante."
   - Comportamento real: o `maxChunks` no Gemma é interpretado como "N chunks **novos** a partir do `doneChunksCount + 1`" (o Python processa N e para, o checkpoint derivado pelo Node garante o resume). No Whisper, `maxChunks * chunkDurationS` define a janela `[0, N*dur]` — a semântica é diferente (transcreve do início até N*dur, não os próximos N), e o usuário é avisado pelo banner que a janela é cumulativa no eixo do tempo.
   - O `maxChunks` continua não-persistido (parâmetro da execução): volta a 0 ao recarregar a comparação.
+- **UX do player de áudio na tela comparativa**:
+  - `MARGIN_AFTER_S` reduzido de 20s para 2s: a folga só precisa absorver o erro de timestamp do Whisper nas bordas (≤~1s); 20s era exagero e tocava a próxima frase inteira após o trecho clicado.
+  - Player tornado **sticky** (`sticky top-0 z-10` no card em `ComparisonView.tsx`): ao rolar a página comparativa, o player permanece fixo no topo do viewport para que o usuário possa clicar em qualquer palavra do diff e tocar o trecho sem precisar rolar de volta até o player. Mantém `bg-white` + `shadow-sm` para legibilidade sobre o texto que passa por baixo.
 - **Fix de alucinações CJK no Whisper** (`sanitize_initial_prompt` em `transcribe_whisper.py`):
   - Sintoma: tokens em chinês (其其其, 人們認識, 瞳孫瞳) apareciam no meio de transcrições em pt-BR quando o documento original terminava com citações, rodapés ou referências em outros idiomas.
   - Causa: o Whisper usa `initial_prompt` como viés de vocabulário. O final do documento era jogado direto no prompt e o modelo "aprendia" a gerar esses caracteres.
@@ -145,7 +148,7 @@ openai-whisper
   - `get-comparison-audio-info` — retorna `{ available, reason }` validando existência do arquivo.
   - `get-comparison-whisper-segments` — retorna segments com timestamps do Whisper.
 - **Componentes frontend**:
-  - `ComparisonView.tsx` — em cada palavra adicionada/omitida/alterada, aparece um botão 🔊 ao passar o mouse. Ao clicar, toca o áudio a partir de `segment.start - 5s` (margem de contexto) até `segment.end`. Usa os **segments reais do Whisper** (não chunks de processamento), dando precisão de segundos.
+  - `ComparisonView.tsx` — em cada palavra adicionada/omitida/alterada, aparece um botão 🔊 ao passar o mouse. Ao clicar, toca o áudio a partir de `segment.start - 5s` (margem de contexto) até `segment.end + 2s` (folga para o erro de timestamp do Whisper). Usa os **segments reais do Whisper** (não chunks de processamento), dando precisão de segundos. O card do player é `sticky top-0` para permanecer visível enquanto o usuário rola o diff.
   - `ResultStep.tsx` — busca lazy dos segments e info de áudio ao montar.
 - **Persistência**: 
   - `finalizeComparison()` gera e grava `diff_result_chunks` em try/catch isolado.
