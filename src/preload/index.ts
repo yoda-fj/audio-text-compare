@@ -35,6 +35,14 @@ export interface IElectronAPI {
   // -------------------------------------------------------------------
   checkPythonStatus: () => Promise<{ ready: boolean; python?: string; message: string }>
   /**
+   * Retorna se o modelo Whisper Large v3 já está baixado localmente.
+   */
+  getWhisperModelStatus: () => Promise<{ downloaded: boolean }>
+  /**
+   * Inicia o download do modelo Whisper Large v3.
+   */
+  downloadWhisperModel: () => Promise<{ downloaded: boolean }>
+  /**
    * Lê a duração (em segundos) de um arquivo de áudio. Retorna `null` em
    * caso de falha. Usado para exibir a estimativa de chunks no UI.
    */
@@ -92,6 +100,10 @@ export interface IElectronAPI {
   onTranscriptionProgress: (
     callback: (comparisonId: number, progress: number, message: string) => void
   ) => () => void
+  /** Subscribe a progresso do download do Whisper. */
+  onWhisperDownloadProgress: (
+    callback: (progress: number, message: string) => void
+  ) => () => void
 }
 
 const api: IElectronAPI = {
@@ -112,6 +124,8 @@ const api: IElectronAPI = {
 
   // Python
   checkPythonStatus: () => ipcRenderer.invoke('check-python-status'),
+  getWhisperModelStatus: () => ipcRenderer.invoke('get-whisper-model-status'),
+  downloadWhisperModel: () => ipcRenderer.invoke('download-whisper-model'),
   getAudioDuration: (audioPath) => ipcRenderer.invoke('get-audio-duration', audioPath),
 
   // Fluxo v2
@@ -148,6 +162,12 @@ const api: IElectronAPI = {
       callback(comparisonId, progress, message)
     ipcRenderer.on('transcription-progress', handler)
     return () => ipcRenderer.removeListener('transcription-progress', handler)
+  },
+  onWhisperDownloadProgress: (callback) => {
+    const handler = (_: unknown, progress: number, message: string) =>
+      callback(progress, message)
+    ipcRenderer.on('whisper-download-progress', handler)
+    return () => ipcRenderer.removeListener('whisper-download-progress', handler)
   },
 }
 

@@ -132,6 +132,17 @@ openai-whisper
   - Cobre: CJK, cirílico, árabe, emoji, símbolos não-latinos. Mantém acentos BR (Coração, pêssego).
 - **ESLint** ainda não está instalado no projeto (`npm run lint` falha com `eslint: command not found`). Pendente para um próximo agente configurar.
 
+## ✅ Implementado hoje (2026-06-13)
+
+### Download do Whisper na tela de configurações
+- Script Python `src/main/python/download_whisper.py` criado: usa `openai-whisper` para baixar `large-v3.pt` no diretório padrão de modelos.
+- `PythonClient` ganhou métodos `isWhisperModelDownloaded()` e `downloadWhisperModel()`.
+- Novos canais IPC:
+  - `get-whisper-model-status` — retorna `{ downloaded: boolean }`.
+  - `download-whisper-model` — inicia o download, emitindo `whisper-download-progress` para o renderer.
+- Preload expôs `getWhisperModelStatus`, `downloadWhisperModel` e `onWhisperDownloadProgress`.
+- `SettingsModal` atualizada: exibe botão "Baixar Whisper Large v3" quando o modelo não está presente, barra de progresso durante o download e mensagem de sucesso quando concluído.
+
 ## ✅ Implementado hoje (2026-06-11)
 
 ### Player de Áudio por Segmento (Whisper)

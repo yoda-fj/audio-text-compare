@@ -145,6 +145,31 @@ ipcMain.handle('check-python-status', async () => {
   return pythonClient.checkStatus()
 })
 
+ipcMain.handle('get-whisper-model-status', async () => {
+  return { downloaded: pythonClient.isWhisperModelDownloaded() }
+})
+
+ipcMain.handle('download-whisper-model', async () => {
+  await pythonClient.downloadWhisperModel({
+    onEvent: (event) => {
+      if (event.type === 'progress') {
+        sendWhisperDownloadProgress(event.progress, event.message)
+      } else if (event.type === 'error') {
+        sendWhisperDownloadProgress(0, event.message)
+      }
+    },
+  })
+  return { downloaded: pythonClient.isWhisperModelDownloaded() }
+})
+
+/**
+ * Envia progresso do download do Whisper para o renderer.
+ */
+function sendWhisperDownloadProgress(progress: number, message: string) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('whisper-download-progress', progress, message)
+}
+
 /**
  * Lê a duração (em segundos) de um arquivo de áudio via script Python.
  * Retorna `null` em caso de falha (venv indisponível, formato não suportado).

@@ -108,6 +108,28 @@ export class PythonClient {
     return dir
   }
 
+  private getWhisperModelPath(): string {
+    return path.join(this.getWhisperModelDir(), 'large-v3.pt')
+  }
+
+  isWhisperModelDownloaded(): boolean {
+    return fs.existsSync(this.getWhisperModelPath())
+  }
+
+  /**
+   * Baixa o modelo Whisper Large v3 usando o próprio openai-whisper.
+   * Reporta progresso via onEvent (JSON do script Python).
+   */
+  async downloadWhisperModel(opts: {
+    onEvent: (event: PythonEvent) => void
+  }): Promise<SpawnResult> {
+    return this.spawnScript({
+      scriptName: this.resolvePythonScript('download_whisper.py'),
+      args: ['--model-dir', this.getWhisperModelDir(), '--model-name', 'large-v3'],
+      onEvent: opts.onEvent,
+    })
+  }
+
   private getHuggingFaceCacheDir(): string {
     const dir = path.join(this.getModelBaseDir(), 'huggingface')
     fs.mkdirSync(dir, { recursive: true })
